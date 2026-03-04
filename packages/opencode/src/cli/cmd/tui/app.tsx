@@ -151,7 +151,6 @@ export function tui(input: {
     }
 
     const renderer = await createCliRenderer(rendererConfig(input.config))
-    TuiPlugin.initializeSlots(renderer)
 
     await render(() => {
       return (
@@ -166,7 +165,6 @@ export function tui(input: {
                     <TuiConfigProvider config={input.config}>
                       <SDKProvider
                         url={input.url}
-                        renderer={renderer}
                         directory={input.directory}
                         fetch={input.fetch}
                         headers={input.headers}
@@ -216,6 +214,13 @@ function App() {
   const kv = useKV()
   const command = useCommandDialog()
   const sdk = useSDK()
+  TuiPlugin.init({
+    client: sdk.client,
+    event: sdk.event,
+    renderer,
+  }).catch((error) => {
+    console.error("Failed to load TUI plugins", error)
+  })
   const toast = useToast()
   const { theme, mode, setMode } = useTheme()
   const sync = useSync()
