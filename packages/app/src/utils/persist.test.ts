@@ -104,4 +104,10 @@ describe("persist localStorage resilience", () => {
     const result = persistTesting.normalize({ value: "ok" }, '{"value":"\\x"}')
     expect(result).toBeUndefined()
   })
+
+  test("workspace storage uses canonicalized workspace keys", () => {
+    expect(persistTesting.workspaceStorage("/private/var/tmp/demo/")).toBe(
+      persistTesting.workspaceStorage("/var/tmp/demo"),
+    )
+  })
 })

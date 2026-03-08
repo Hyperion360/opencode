@@ -1,0 +1,81 @@
+{
+  "$schema": "https://opencode.ai/desktop-theme.json",
+  "name": "Hyperion360",
+  "id": "hyperion360",
+  "light": {
+    "seeds": {
+      "neutral": "#717171",
+      "primary": "#121212",
+      "success": "#15803d",
+      "warning": "#d97706",
+      "error": "#dc2626",
+      "info": "#2563eb",
+      "interactive": "#2563eb",
+      "diffAdd": "#16a34a",
+      "diffDelete": "#dc2626"
+    },
+    "overrides": {
+      "background-base": "#ffffff",
+      "background-weak": "#f6f6f6",
+      "surface-base": "#f6f6f6",
+      "surface-raised-base": "#ffffff",
+      "surface-raised-strong": "#ffffff",
+      "surface-raised-stronger": "#ffffff",
+      "surface-strong": "#ffffff",
+      "surface-weak": "#f6f6f6",
+      "text-base": "#444444",
+      "text-weak": "#717171",
+      "text-weaker": "#8a8a8a",
+      "text-strong": "#040404",
+      "border-base": "#eaeaea",
+      "border-weak-base": "#eaeaea",
+      "button-primary-base": "#121212",
+      "button-secondary-base": "#ffffff",
+      "icon-base": "#717171",
+      "icon-strong-base": "#040404",
+      "syntax-comment": "#717171",
+      "syntax-string": "#0f766e",
+      "syntax-keyword": "#111827",
+      "syntax-primitive": "#b45309",
+      "syntax-operator": "#444444"
+    }
+  },
+  "dark": {
+    "seeds": {
+      "neutral": "#9ca3af",
+      "primary": "#f9fafb",
+      "success": "#22c55e",
+      "warning": "#f59e0b",
+      "error": "#f87171",
+      "info": "#60a5fa",
+      "interactive": "#60a5fa",
+      "diffAdd": "#4ade80",
+      "diffDelete": "#f87171"
+    },
+    "overrides": {
+      "background-base": "#111827",
+      "background-weak": "#1f2937",
+      "surface-base": "#1f2937",
+      "surface-raised-base": "#1f2937",
+      "surface-raised-strong": "#1f2937",
+      "surface-raised-stronger": "#243041",
+      "surface-strong": "#1f2937",
+      "surface-weak": "#111827",
+      "text-base": "#e5e7eb",
+      "text-weak": "#9ca3af",
+      "text-weaker": "#6b7280",
+      "text-strong": "#f9fafb",
+      "border-base": "#374151",
+      "border-weak-base": "#374151",
+      "button-primary-base": "#f9fafb",
+      "button-secondary-base": "#1f2937",
+      "icon-base": "#9ca3af",
+      "icon-strong-base": "#f9fafb",
+      "syntax-comment": "#9ca3af",
+      "syntax-string": "#5eead4",
+      "syntax-keyword": "#f9fafb",
+      "syntax-primitive": "#fbbf24",
+      "syntax-operator": "#e5e7eb"
+    }
+  }
+}

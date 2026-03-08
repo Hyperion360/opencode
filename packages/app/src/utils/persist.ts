@@ -3,6 +3,7 @@ import { makePersisted, type AsyncStorage, type SyncStorage } from "@solid-primi
 import { checksum } from "@opencode-ai/util/encode"
 import { createResource, type Accessor } from "solid-js"
 import type { SetStoreFunction, Store } from "solid-js/store"
+import { normalizeWorkspace } from "./workspace"
 
 type InitType = Promise<string> | string | null
 type PersistedWithReady<T> = [Store<T>, SetStoreFunction<T>, InitType, Accessor<boolean>]
@@ -204,8 +205,9 @@ function normalize(defaults: unknown, raw: string, migrate?: (value: unknown) =>
 }
 
 function workspaceStorage(dir: string) {
-  const head = dir.slice(0, 12) || "workspace"
-  const sum = checksum(dir) ?? "0"
+  const key = normalizeWorkspace(dir)
+  const head = key.slice(0, 12) || "workspace"
+  const sum = checksum(key) ?? "0"
   return `opencode.workspace.${head}.${sum}.dat`
 }
 
@@ -300,6 +302,7 @@ export const PersistTesting = {
   localStorageDirect,
   localStorageWithPrefix,
   normalize,
+  workspaceStorage,
 }
 
 export const Persist = {
