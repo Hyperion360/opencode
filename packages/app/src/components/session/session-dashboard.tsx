@@ -50,7 +50,7 @@ export function SessionDashboard(props: {
 
         <Show when={props.recovery}>
           {(item) => (
-            <Card class="p-4 flex flex-col gap-3" data-recovery-state={item().state} data-recovery-action={item().action.kind}>
+            <Card class="p-4 flex flex-col gap-3" data-recovery-state={item().state} data-recovery-action={item().action.kind} data-recovery-approval={item().approval ? "needed" : "clear"}>
               <div class="flex items-start justify-between gap-3 flex-wrap">
                 <div class="flex items-start gap-2">
                   <Icon name="task" size="small" />
@@ -61,13 +61,21 @@ export function SessionDashboard(props: {
                 </div>
                 <div class="flex items-center gap-2 flex-wrap">
                   <Tag class={`px-2 py-1 ${tone(item().tone)}`}>{item().state}</Tag>
+                  <Show when={item().approval}>
+                    <Tag class="px-2 py-1 bg-red-500/15 text-red-200">approval needed</Tag>
+                  </Show>
                   <Tag class="px-2 py-1 bg-background-strong text-text-strong">persisted snapshot</Tag>
                 </div>
               </div>
               <div class="flex items-center justify-between gap-3 flex-wrap">
-                <div class="text-12-medium text-text-strong">{item().title}</div>
+                <div class="min-w-0">
+                  <div class="text-12-medium text-text-strong">{item().approval?.title ?? item().title}</div>
+                  <Show when={item().approval}>
+                    {(approval) => <div class="mt-1 text-11-regular text-text-weak max-w-xl">{approval().detail}</div>}
+                  </Show>
+                </div>
                 <Button variant="secondary" size="small" onClick={props.onStageRecovery}>
-                  {item().action.label}
+                  {item().approval?.label ?? item().action.label}
                 </Button>
               </div>
             </Card>

@@ -14,6 +14,10 @@ const board = (input: {
   title?: string
   verify?: Board["verification"]["state"]
   files?: number
+  retryCount?: number
+  parallel?: boolean
+  activeAgents?: number
+  rollback?: boolean
 }) =>
   ({
     execution: {
@@ -21,7 +25,7 @@ const board = (input: {
       done: 0,
       active: input.state === "idle" ? 0 : 1,
       failed: input.state === "retry" ? 1 : 0,
-      parallel: false,
+      parallel: input.parallel ?? false,
       state: input.state,
       nodes:
         input.total === 0
@@ -52,22 +56,22 @@ const board = (input: {
             : "Recovery is still in progress.",
       total: input.total,
       passed: 0,
-      failed: input.state === "retry" ? 1 : 0,
+      failed: input.retryCount ?? (input.state === "retry" ? 1 : 0),
       pending: input.state === "running" ? 1 : 0,
       logs: input.total,
       artifacts: 0,
       checks: [],
     },
     delivery: {
-      files: input.files ?? input.total,
-      additions: input.files ?? input.total,
+      files: input.files ?? 0,
+      additions: input.files ?? 0,
       deletions: 0,
       patches: 0,
-      rollback: false,
+      rollback: input.rollback ?? false,
     },
     agent: {
       total: input.total,
-      active: input.state === "idle" ? 0 : 1,
+      active: input.activeAgents ?? (input.state === "idle" ? 0 : 1),
       board: [],
     },
     activity:
@@ -84,8 +88,8 @@ const board = (input: {
           ],
     operations: {
       audit: input.total,
-      retries: input.state === "retry" ? 1 : 0,
-      rollback: false,
+      retries: input.retryCount ?? (input.state === "retry" ? 1 : 0),
+      rollback: input.rollback ?? false,
       activation: 0,
       quality: 100,
       duration: 1,
@@ -198,6 +202,29 @@ describe("workspace run persistence", () => {
 
     expect(recovery?.state).toBe("resumable")
     expect(recovery?.action.kind).toBe("resume")
+    expect(recovery?.approval).toBeUndefined()
+  })
+
+  test("adds an approval checkpoint before risky recovered continuation", () => {
+    const record = backlog.buildRunRecord({
+      sessionID: "s-risk",
+      title: "Durable run",
+      updatedAt: 18,
+      board: board({ state: "running", total: 2, title: "Resume orchestration", files: 3, parallel: true, activeAgents: 2 }),
+      wave: { type: "busy" },
+    })
+
+    const recovery = backlog.resolveRunRecovery({
+      live: board({ state: "idle", total: 0 }),
+      record,
+      status: { type: "idle" },
+    })
+
+    expect(recovery?.state).toBe("resumable")
+    expect(recovery?.action.kind).toBe("resume")
+    expect(recovery?.approval?.title).toBe("Approval needed before continuation")
+    expect(recovery?.approval?.label).toBe("Stage approval checkpoint")
+    expect(recovery?.approval?.detail).toContain("3 changed files are already attached")
   })
 
   test("surfaces a failed recovery when the persisted run ended in retry", () => {
@@ -238,5 +265,6 @@ describe("workspace run persistence", () => {
     expect(recovery?.state).toBe("awaiting")
     expect(recovery?.action.kind).toBe("review")
     expect(recovery?.title).toBe("Awaiting delivery review")
+    expect(recovery?.approval).toBeUndefined()
   })
 })

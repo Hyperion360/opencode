@@ -56,6 +56,7 @@ import { terminalTabLabel } from "@/pages/session/terminal-label"
 import { MessageTimeline } from "@/pages/session/message-timeline"
 import {
   buildBoard,
+  buildApprovalPrompt,
   buildRecoveryPrompt,
   buildPlaybookPrompt,
   buildResumePrompt,
@@ -850,6 +851,18 @@ export default function Page() {
       template: selectedTemplate()?.label,
       playbook: selectedPlaybook()?.label,
       skills: selectedSkills().map((skill) => skill.label),
+    }
+
+    if (item.approval) {
+      stagePrompt(
+        buildApprovalPrompt({
+          ...input,
+          focus: item.title,
+          next: item.action.kind === "recover" ? "recover the blocked node" : "resume the recovered run",
+          risks: item.approval.risks,
+        }),
+      )
+      return
     }
 
     if (item.action.kind === "recover") {

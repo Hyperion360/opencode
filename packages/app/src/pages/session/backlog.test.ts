@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { applyTemplate, buildBoard, buildPlaybookPrompt, buildRecoveryPrompt, buildResumePrompt, buildReviewPrompt, buildRetryPrompt, kitTemplates } from "./backlog"
+import { applyTemplate, buildApprovalPrompt, buildBoard, buildPlaybookPrompt, buildRecoveryPrompt, buildResumePrompt, buildReviewPrompt, buildRetryPrompt, kitTemplates } from "./backlog"
 
 describe("session backlog helpers", () => {
   test("applies a template as structured intake", () => {
@@ -105,6 +105,16 @@ describe("session backlog helpers", () => {
     const resume = buildResumePrompt({ title: "Recovered run", focus: "Resume recovered run", detail: "Persisted board restored", template: "Feature launch", playbook: "Parallel delivery", skills: ["Spec guard"] })
     const recovery = buildRecoveryPrompt({ title: "Recovered run", node: "Recover orchestration state", detail: "quota exceeded", template: "Feature launch", playbook: "Parallel delivery", skills: ["QA gate"] })
     const review = buildReviewPrompt({ title: "Recovered run", detail: "Validation evidence is attached", template: "Feature launch", playbook: "Parallel delivery", skills: ["Ops audit"] })
+    const approval = buildApprovalPrompt({
+      title: "Recovered run",
+      focus: "Resume recovered run",
+      detail: "Persisted board restored",
+      next: "resume the recovered run",
+      template: "Feature launch",
+      playbook: "Parallel delivery",
+      skills: ["Ops audit"],
+      risks: ["3 changed files are already attached to the recovered snapshot", "multiple execution nodes were active in parallel"],
+    })
 
     expect(retry).toContain("Task: Re-run tests")
     expect(retry).toContain("Parallel delivery")
@@ -113,6 +123,9 @@ describe("session backlog helpers", () => {
     expect(resume).toContain("Recovery focus: Resume recovered run")
     expect(recovery).toContain("Blocked node: Recover orchestration state")
     expect(review).toContain("Operator note: Validation evidence is attached")
+    expect(approval).toContain("Request operator approval before continuing the recovered Hyperion360 run.")
+    expect(approval).toContain("Next step after approval: resume the recovered run")
+    expect(approval).toContain("- multiple execution nodes were active in parallel")
   })
 
   test("keeps recovery affordance markers in the dashboard rendering", async () => {
@@ -120,6 +133,8 @@ describe("session backlog helpers", () => {
 
     expect(view).toContain("Recovered run state")
     expect(view).toContain("data-recovery-state")
+    expect(view).toContain("data-recovery-approval")
+    expect(view).toContain("approval needed")
     expect(view).toContain("onStageRecovery")
   })
 })

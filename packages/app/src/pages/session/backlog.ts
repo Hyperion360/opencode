@@ -153,6 +153,14 @@ export type RunRecovery = {
     label: string
   }
   node?: string
+  approval?: RunApproval
+}
+
+export type RunApproval = {
+  title: string
+  detail: string
+  label: string
+  risks: string[]
 }
 
 type RunStore = {
@@ -374,7 +382,59 @@ export function buildReviewPrompt(input: { title?: string; detail?: string; temp
   ].join("\n")
 }
 
+export function buildApprovalPrompt(input: { title?: string; focus?: string; detail?: string; next: string; template?: string; playbook?: string; skills: string[]; risks: string[] }) {
+  return [
+    "Request operator approval before continuing the recovered Hyperion360 run.",
+    input.title ? `Run: ${input.title}` : "Run: current session",
+    input.focus ? `Checkpoint: ${input.focus}` : "Checkpoint: recovered continuation",
+    input.detail ? `Recovered context: ${input.detail}` : "Recovered context: persisted board state is available",
+    `Next step after approval: ${input.next}`,
+    input.template ? `Template context: ${input.template}` : "Template context: none selected",
+    input.playbook ? `Playbook context: ${input.playbook}` : "Playbook context: none selected",
+    "Attached skill packs:",
+    ...(input.skills.length > 0 ? input.skills.map((item) => `- ${item}`) : ["- none attached"]),
+    "",
+    "Risk signals:",
+    ...(input.risks.length > 0 ? input.risks.map((item) => `- ${item}`) : ["- recovered continuation needs explicit operator approval"]),
+    "",
+    "Do not continue execution yet. First summarize what was recovered, explain the risk signals, and ask for explicit operator approval or a revised scope before resuming work.",
+  ].join("\n")
+}
+
 const retryNode = (board: Board) => board.execution.nodes.find((item) => item.retry)?.label ?? board.execution.nodes[0]?.label
+
+const join = (items: string[]) => {
+  if (items.length === 0) return ""
+  if (items.length === 1) return items[0] ?? ""
+  if (items.length === 2) return `${items[0]} and ${items[1]}`
+  return `${items.slice(0, -1).join(", ")}, and ${items.at(-1)}`
+}
+
+const approvalSignals = (board: Board) =>
+  [
+    board.delivery.files > 0 ? `${board.delivery.files} changed file${board.delivery.files === 1 ? " is" : "s are"} already attached to the recovered snapshot` : undefined,
+    board.verification.state === "blocked" && board.delivery.files > 0 ? "verification is still blocked for the recovered diff set" : undefined,
+    board.execution.parallel ? "multiple execution nodes were active in parallel" : undefined,
+    board.operations.retries > 0 ? `${board.operations.retries} recovery retr${board.operations.retries === 1 ? "y was" : "ies were"} already recorded` : undefined,
+    board.delivery.rollback ? "rollback artifacts are already visible" : undefined,
+    board.agent.active > 1 ? `${board.agent.active} agents were active at the same time` : undefined,
+  ].filter((item): item is string => !!item)
+
+function resolveRunApproval(input: { board: Board; recovery: RunRecovery }) {
+  if (input.recovery.action.kind === "review") return
+
+  const risks = approvalSignals(input.board)
+  if (risks.length === 0) return
+
+  const next = input.recovery.action.kind === "recover" ? "starting another recovery pass" : "continuing the recovered run"
+
+  return {
+    title: "Approval needed before continuation",
+    detail: `Continuing from the persisted snapshot is risky because ${join(risks)}. Stage an approval checkpoint before ${next}.`,
+    label: "Stage approval checkpoint",
+    risks,
+  } satisfies RunApproval
+}
 
 export function buildBoard(input: {
   session?: Session
@@ -610,9 +670,17 @@ export function resolveRunRecovery(input: { live: Board; record?: RunRecord; sta
 
   const board = input.record.board
   const node = retryNode(board)
+  const attachApproval = (recovery: RunRecovery) => {
+    const approval = resolveRunApproval({ board, recovery })
+    if (!approval) return recovery
+    return {
+      ...recovery,
+      approval,
+    } satisfies RunRecovery
+  }
 
   if (input.record.wave.type === "retry" || board.execution.state === "retry" || board.execution.failed > 0 || board.verification.failed > 0) {
-    return {
+    return attachApproval({
       state: "failed",
       tone: "blocked",
       title: "Recovery required",
@@ -627,11 +695,11 @@ export function resolveRunRecovery(input: { live: Board; record?: RunRecord; sta
         label: "Stage recovery prompt",
       },
       node,
-    } satisfies RunRecovery
+    } satisfies RunRecovery)
   }
 
   if (input.record.wave.type === "busy" || board.execution.state === "running" || board.execution.active > 0) {
-    return {
+    return attachApproval({
       state: "resumable",
       tone: "running",
       title: "Resume recovered run",
@@ -641,7 +709,7 @@ export function resolveRunRecovery(input: { live: Board; record?: RunRecord; sta
         label: "Stage resume prompt",
       },
       node,
-    } satisfies RunRecovery
+    } satisfies RunRecovery)
   }
 
   if (board.verification.state === "ready" || board.verification.state === "blocked" || board.delivery.files > 0) {
@@ -663,7 +731,7 @@ export function resolveRunRecovery(input: { live: Board; record?: RunRecord; sta
 
   if (!hasRunState({ board, status: input.record.wave })) return
 
-  return {
+  return attachApproval({
     state: "interrupted",
     tone: "warning",
     title: "Recovered snapshot ready",
@@ -673,7 +741,7 @@ export function resolveRunRecovery(input: { live: Board; record?: RunRecord; sta
       label: "Stage resume prompt",
     },
     node,
-  } satisfies RunRecovery
+  } satisfies RunRecovery)
 }
 
 function pruneRuns(runs: Record<string, RunRecord>) {
