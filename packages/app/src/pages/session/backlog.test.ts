@@ -819,6 +819,13 @@ describe("session backlog helpers", () => {
     expect(view).toContain("data-reviewer-risk")
   })
 
+  test("keeps specialist snapshot markers in the dashboard rendering", async () => {
+    const view = await Bun.file(new URL("../../components/session/session-dashboard.tsx", import.meta.url)).text()
+
+    expect(view).toContain("data-specialist-snapshot")
+    expect(view).toContain("saved specialist snapshot")
+  })
+
   test("keeps delivery export and integration hook markers in the dashboard and review surfaces", async () => {
     const dashboard = await Bun.file(new URL("../../components/session/session-dashboard.tsx", import.meta.url)).text()
     const review = await Bun.file(new URL("./review-tab.tsx", import.meta.url)).text()

@@ -72,13 +72,16 @@ import {
   createWorkspaceKit,
   createWorkspaceMetrics,
   createWorkspaceRuns,
+  createWorkspaceSpecialist,
   hasRunState,
   integrationTargets,
   kitPlaybooks,
   kitSkills,
   kitTemplates,
+  buildSpecialistSnapshot,
   resolveMetricBoard,
   resolveMetricsSnapshot,
+  resolveSpecialistFallback,
   resolveRunBoard,
   resolveRunRecovery,
 } from "@/pages/session/backlog"
@@ -137,6 +140,7 @@ export default function Page() {
   const kit = createWorkspaceKit(() => sdk.directory)
   const metrics = createWorkspaceMetrics(() => sdk.directory)
   const runs = createWorkspaceRuns(() => sdk.directory)
+  const specialist = createWorkspaceSpecialist(() => sdk.directory, () => params.id)
 
   const permRequest = createMemo(() => {
     const sessionID = params.id
@@ -792,6 +796,31 @@ export default function Page() {
   )
 
   const status = createMemo(() => sync.data.session_status[params.id ?? ""] ?? idle)
+  const previewPrompt = createMemo(() => {
+    if (!prompt.ready()) return ""
+    return prompt
+      .current()
+      .map((part) => {
+        if (part.type === "file") return `[file:${part.path}]`
+        if (part.type === "agent") return `@${part.name}`
+        if (part.type === "image") return `[image:${part.filename}]`
+        return part.content
+      })
+      .join("")
+      .trim()
+  })
+  const currentHandoffFiles = createMemo<Record<string, SelectedLineRange | null> | undefined>(() => {
+    if (!file.ready()) return
+    return Object.fromEntries(
+      tabs()
+        .all()
+        .flatMap((tab) => {
+          const path = file.pathFromTab(tab)
+          if (!path) return []
+          return [[path, file.selectedLines(path) ?? null] as const]
+        }),
+    )
+  })
   const selectedTemplate = createMemo(() => kitTemplates.find((item) => item.id === kit.template()))
   const selectedPlaybook = createMemo(() => kitPlaybooks.find((item) => item.id === kit.playbook()))
   const selectedSkills = createMemo(() => kit.skills().flatMap((id) => kitSkills.find((item) => item.id === id) ?? []))
@@ -821,6 +850,22 @@ export default function Page() {
       status: status(),
     })
   })
+  const specialistSnapshot = createMemo(() => {
+    if (!specialist.ready()) return
+    return specialist.latest()
+  })
+  const specialistFallback = createMemo(() =>
+    resolveSpecialistFallback({
+      agents: board().agent.board,
+      handoff: {
+        prompt: previewPrompt(),
+        files: currentHandoffFiles(),
+      },
+      snapshot: specialistSnapshot(),
+    }),
+  )
+  const handoffPrompt = createMemo(() => handoff.session.get(sessionKey())?.prompt ?? specialistFallback().handoff?.prompt)
+  const handoffFiles = createMemo(() => handoff.session.get(sessionKey())?.files ?? specialistFallback().handoff?.files)
   const metric = createMemo(() => {
     if (!metrics.ready()) return
     return resolveMetricsSnapshot({
@@ -1082,6 +1127,33 @@ export default function Page() {
         delivery: delivery(),
       }),
     )
+  })
+
+  createEffect(() => {
+    if (!specialist.ready()) return
+    const id = params.id
+    if (!id) return
+
+    const snapshot = buildSpecialistSnapshot({
+      sessionID: id,
+      title: info()?.title,
+      updatedAt: Date.now(),
+      template: kit.template(),
+      playbook: kit.playbook(),
+      skills: kit.skills(),
+      agents: liveBoard().agent.board,
+      handoff: {
+        prompt: previewPrompt(),
+        files: currentHandoffFiles(),
+      },
+    })
+
+    if (!snapshot) {
+      specialist.clear()
+      return
+    }
+
+    specialist.remember(snapshot)
   })
 
   createEffect(
@@ -1882,18 +1954,6 @@ export default function Page() {
     document.addEventListener("keydown", handleKeyDown)
   })
 
-  const previewPrompt = () =>
-    prompt
-      .current()
-      .map((part) => {
-        if (part.type === "file") return `[file:${part.path}]`
-        if (part.type === "agent") return `@${part.name}`
-        if (part.type === "image") return `[image:${part.filename}]`
-        return part.content
-      })
-      .join("")
-      .trim()
-
   createEffect(() => {
     if (!prompt.ready()) return
     setSessionHandoff(sessionKey(), { prompt: previewPrompt() })
@@ -1919,15 +1979,7 @@ export default function Page() {
   createEffect(() => {
     if (!file.ready()) return
     setSessionHandoff(sessionKey(), {
-      files: Object.fromEntries(
-        tabs()
-          .all()
-          .flatMap((tab) => {
-            const path = file.pathFromTab(tab)
-            if (!path) return []
-            return [[path, file.selectedLines(path) ?? null] as const]
-          }),
-      ),
+      files: currentHandoffFiles() ?? {},
     })
   })
 
@@ -1968,6 +2020,8 @@ export default function Page() {
               <Match when={params.id}>
                 <SessionDashboard
                   board={dashboard()}
+                  agentBoard={specialistFallback().agents}
+                  specialist={specialistFallback().source === "live" ? undefined : specialistFallback()}
                   review={review()}
                   delivery={delivery()}
                   integration={integration()}
@@ -2116,7 +2170,7 @@ export default function Page() {
             permissionRequest={permRequest}
             blocked={blocked()}
             promptReady={prompt.ready()}
-            handoffPrompt={handoff.session.get(sessionKey())?.prompt}
+            handoffPrompt={handoffPrompt()}
             t={language.t as (key: string, vars?: Record<string, string | number | boolean>) => string}
             responding={ui.responding}
             onDecide={decide}
@@ -2168,7 +2222,7 @@ export default function Page() {
           visibleUserMessages={visibleUserMessages as () => unknown[]}
           view={view}
           info={info as () => unknown}
-          handoffFiles={() => handoff.session.get(sessionKey())?.files}
+          handoffFiles={handoffFiles}
           codeComponent={codeComponent}
           addCommentToContext={addCommentToContext}
           activeDraggable={() => store.activeDraggable}

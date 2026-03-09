@@ -8,8 +8,12 @@ import type { LivingSpecInput, LivingSpecStatus } from "./living-spec"
 const MAX_KIT_STORES = 20
 const MAX_METRIC_STORES = 20
 const MAX_RUN_STORES = 20
+const MAX_SPECIALIST_STORES = 20
 const MAX_HISTORY = 24
 const MAX_RUNS = 12
+const MAX_SPECIALIST_AGENTS = 4
+const MAX_SPECIALIST_FILES = 8
+const MAX_SPECIALIST_PROMPT = 280
 const checkPattern = /test|lint|type|build|check|review|verify|validate|diagnostic/i
 const priorityRank = { high: 0, medium: 1, low: 2 }
 const statusRank = { in_progress: 0, pending: 1, cancelled: 2, completed: 3 }
@@ -59,6 +63,9 @@ type RunCacheEntry = { value: RunSession; dispose: VoidFunction }
 
 type MetricSession = ReturnType<typeof createMetricSession>
 type MetricCacheEntry = { value: MetricSession; dispose: VoidFunction }
+
+type SpecialistSession = ReturnType<typeof createSpecialistSession>
+type SpecialistCacheEntry = { value: SpecialistSession; dispose: VoidFunction }
 
 export type GraphNode = {
   id: string
@@ -249,6 +256,43 @@ export type MetricTrend = {
   explainer: string
 }
 
+export type SpecialistSelection = {
+  start: number
+  end: number
+}
+
+export type SpecialistFile = {
+  path: string
+  selection?: SpecialistSelection
+}
+
+export type SpecialistSnapshot = {
+  sessionID: string
+  title?: string
+  updatedAt: number
+  specialist: {
+    template?: string
+    playbook?: string
+    skills: string[]
+    agents: AgentCard[]
+  }
+  handoff?: {
+    prompt?: string
+    files: SpecialistFile[]
+  }
+}
+
+export type SpecialistFallback = {
+  source: "live" | "mixed" | "persisted"
+  updatedAt?: number
+  agents: AgentCard[]
+  handoff?: {
+    prompt?: string
+    files?: Record<string, SpecialistSelection | null>
+  }
+  stored?: SpecialistSnapshot["specialist"]
+}
+
 export type RunRecovery = {
   state: "resumable" | "interrupted" | "failed" | "awaiting"
   tone: "running" | "warning" | "blocked" | "ready"
@@ -371,6 +415,10 @@ type MetricsStore = {
   previous?: MetricsSnapshot
 }
 
+type SpecialistStore = {
+  latest?: SpecialistSnapshot
+}
+
 export const kitTemplates: KitTemplate[] = [
   {
     id: "feature-launch",
@@ -466,6 +514,8 @@ const defaultRunStore: RunStore = {
 }
 
 const defaultMetricsStore: MetricsStore = {}
+
+const defaultSpecialistStore: SpecialistStore = {}
 
 const event = (kind: KitEvent["kind"], action: KitEvent["action"], label: string): KitEvent => ({
   id: crypto.randomUUID(),
@@ -733,6 +783,133 @@ const sameMetricsSnapshot = (left?: MetricsSnapshot, right?: MetricsSnapshot) =>
   if (left.delivery.rollback !== right.delivery.rollback) return false
   if (left.retries !== right.retries) return false
   return true
+}
+
+const sameAgentBoard = (left: AgentCard[], right: AgentCard[]) =>
+  left.length === right.length &&
+  left.every(
+    (item, index) =>
+      item.name === right[index]?.name &&
+      item.description === right[index]?.description &&
+      item.mode === right[index]?.mode &&
+      item.color === right[index]?.color &&
+      item.active === right[index]?.active &&
+      item.uses === right[index]?.uses &&
+      item.commands === right[index]?.commands,
+  )
+
+const sameSelection = (left?: SpecialistSelection, right?: SpecialistSelection) => {
+  if (!left || !right) return left === right
+  return left.start === right.start && left.end === right.end
+}
+
+const sameSpecialistFiles = (left: SpecialistFile[], right: SpecialistFile[]) =>
+  left.length === right.length &&
+  left.every((item, index) => item.path === right[index]?.path && sameSelection(item.selection, right[index]?.selection))
+
+const sameSpecialistSnapshot = (left?: SpecialistSnapshot, right?: SpecialistSnapshot) => {
+  if (!left || !right) return left === right
+  if (left.sessionID !== right.sessionID) return false
+  if (left.title !== right.title) return false
+  if (left.specialist.template !== right.specialist.template) return false
+  if (left.specialist.playbook !== right.specialist.playbook) return false
+  if (!sameKit(left.specialist.skills, right.specialist.skills)) return false
+  if (!sameAgentBoard(left.specialist.agents, right.specialist.agents)) return false
+  if (left.handoff?.prompt !== right.handoff?.prompt) return false
+  return sameSpecialistFiles(left.handoff?.files ?? [], right.handoff?.files ?? [])
+}
+
+const specialistFiles = (files?: Record<string, SpecialistSelection | null>) =>
+  Object.entries(files ?? {})
+    .slice(0, MAX_SPECIALIST_FILES)
+    .map(([path, selection]) =>
+      selection
+        ? {
+            path,
+            selection: {
+              start: Math.min(selection.start, selection.end),
+              end: Math.max(selection.start, selection.end),
+            },
+          }
+        : { path },
+    )
+
+const specialistRecord = (files?: SpecialistFile[]) => {
+  const items = files?.map((item) => [item.path, item.selection ?? null] as const) ?? []
+  if (items.length === 0) return
+  return Object.fromEntries(items)
+}
+
+export function buildSpecialistSnapshot(input: {
+  sessionID: string
+  title?: string
+  updatedAt: number
+  template?: string
+  playbook?: string
+  skills: string[]
+  agents: AgentCard[]
+  handoff?: {
+    prompt?: string
+    files?: Record<string, SpecialistSelection | null>
+  }
+}) {
+  const specialist = {
+    template: text(input.template),
+    playbook: text(input.playbook),
+    skills: input.skills.map((item) => item.trim()).filter(Boolean).sort(),
+    agents: input.agents.slice(0, MAX_SPECIALIST_AGENTS).map((item) => ({ ...item })),
+  }
+  const prompt = text(input.handoff?.prompt)
+  const files = specialistFiles(input.handoff?.files)
+  if (!specialist.template && !specialist.playbook && specialist.skills.length === 0 && specialist.agents.length === 0 && !prompt && files.length === 0) {
+    return
+  }
+  return {
+    sessionID: input.sessionID,
+    title: text(input.title),
+    updatedAt: input.updatedAt,
+    specialist,
+    handoff:
+      prompt || files.length > 0
+        ? {
+            prompt: prompt ? cut(prompt, MAX_SPECIALIST_PROMPT) : undefined,
+            files,
+          }
+        : undefined,
+  } satisfies SpecialistSnapshot
+}
+
+export function resolveSpecialistFallback(input: {
+  agents: AgentCard[]
+  handoff?: {
+    prompt?: string
+    files?: Record<string, SpecialistSelection | null>
+  }
+  snapshot?: SpecialistSnapshot
+}) {
+  const prompt = text(input.handoff?.prompt)
+  const liveFiles = input.handoff?.files
+  const liveFileCount = Object.keys(liveFiles ?? {}).length
+  const savedFiles = specialistRecord(input.snapshot?.handoff?.files)
+  const usesSnapshot =
+    (input.agents.length === 0 && (input.snapshot?.specialist.agents.length ?? 0) > 0) ||
+    (!prompt && !!input.snapshot?.handoff?.prompt) ||
+    (liveFileCount === 0 && !!savedFiles)
+  const hasLive = input.agents.length > 0 || !!prompt || liveFileCount > 0
+
+  return {
+    source: usesSnapshot ? (hasLive ? "mixed" : "persisted") : "live",
+    updatedAt: usesSnapshot ? input.snapshot?.updatedAt : undefined,
+    agents: input.agents.length > 0 ? input.agents : (input.snapshot?.specialist.agents ?? []),
+    handoff:
+      prompt || liveFileCount > 0 || input.snapshot?.handoff
+        ? {
+            prompt: prompt ?? input.snapshot?.handoff?.prompt,
+            files: liveFileCount > 0 ? liveFiles : savedFiles,
+          }
+        : undefined,
+    stored: input.snapshot?.specialist,
+  } satisfies SpecialistFallback
 }
 
 const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "session"
@@ -1749,6 +1926,15 @@ function pruneMetricCache(cache: Map<string, MetricCacheEntry>) {
   }
 }
 
+function pruneSpecialistCache(cache: Map<string, SpecialistCacheEntry>) {
+  while (cache.size > MAX_SPECIALIST_STORES) {
+    const oldest = cache.keys().next().value as string | undefined
+    if (!oldest) return
+    cache.get(oldest)?.dispose()
+    cache.delete(oldest)
+  }
+}
+
 function createRunSession(dir: string) {
   const key = normalizeWorkspace(dir)
   const legacy = [`${key}/hyperion360-runs.v1`]
@@ -1785,6 +1971,25 @@ function createMetricSession(dir: string) {
         produce((draft) => {
           if (sameMetricsSnapshot(draft.latest, snapshot)) return
           draft.previous = draft.latest
+          draft.latest = snapshot
+        }),
+      ),
+  }
+}
+
+function createSpecialistSession(dir: string, sessionID: string) {
+  const key = normalizeWorkspace(dir)
+  const [store, setStore, _, ready] = persisted(Persist.session(key, sessionID, "session-specialist"), createStore<SpecialistStore>(defaultSpecialistStore))
+
+  return {
+    ready,
+    state: () => store,
+    latest: () => store.latest,
+    clear: () => setStore("latest", undefined),
+    remember: (snapshot: SpecialistSnapshot) =>
+      setStore(
+        produce((draft) => {
+          if (sameSpecialistSnapshot(draft.latest, snapshot)) return
           draft.latest = snapshot
         }),
       ),
@@ -1969,6 +2174,46 @@ export function createWorkspaceMetrics(dir: Accessor<string>) {
     latest: () => state().latest(),
     previous: () => state().previous(),
     remember: (snapshot: MetricsSnapshot) => state().remember(snapshot),
+  }
+}
+
+export function createWorkspaceSpecialist(dir: Accessor<string>, session: Accessor<string | undefined>) {
+  const cache = new Map<string, SpecialistCacheEntry>()
+
+  onCleanup(() => {
+    for (const entry of cache.values()) entry.dispose()
+    cache.clear()
+  })
+
+  const load = (directory: string, sessionID: string) => {
+    const key = `${normalizeWorkspace(directory)}:${sessionID}`
+    const existing = cache.get(key)
+    if (existing) {
+      cache.delete(key)
+      cache.set(key, existing)
+      return existing.value
+    }
+
+    const entry = createRoot((dispose) => ({
+      value: createSpecialistSession(directory, sessionID),
+      dispose,
+    }))
+    cache.set(key, entry)
+    pruneSpecialistCache(cache)
+    return entry.value
+  }
+
+  const state = createMemo(() => {
+    const id = session()
+    if (!id) return
+    return load(dir(), id)
+  })
+
+  return {
+    ready: () => state()?.ready() ?? true,
+    latest: () => state()?.latest(),
+    clear: () => state()?.clear(),
+    remember: (snapshot: SpecialistSnapshot) => state()?.remember(snapshot),
   }
 }
 

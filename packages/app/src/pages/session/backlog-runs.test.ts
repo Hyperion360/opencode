@@ -103,6 +103,7 @@ beforeAll(async () => {
     return {
       Persist: {
         workspace: (_dir: string, key: string) => ({ key }),
+        session: (_dir: string, session: string, key: string) => ({ key: `${session}:${key}` }),
       },
       persisted: <T extends object>(target: string | { key: string }, store: ReturnType<typeof createStore<T>>) => {
         const key = typeof target === "string" ? target : target.key
@@ -227,6 +228,117 @@ describe("workspace run persistence", () => {
 
       expect(restored).toEqual(next)
       expect(metrics.previous()).toEqual(snapshot)
+      dispose()
+    })
+  })
+
+  test("builds and restores a compact specialist snapshot when live context is empty", () => {
+    const snapshot = backlog.buildSpecialistSnapshot({
+      sessionID: "s-specialist",
+      title: "Recovered specialist",
+      updatedAt: 25,
+      template: "feature-launch",
+      playbook: "parallel-delivery",
+      skills: ["qa-gate", "spec-guard"],
+      agents: [
+        {
+          name: "planner",
+          description: "Plans the recovered handoff",
+          mode: "primary",
+          active: true,
+          uses: 2,
+          commands: 3,
+        },
+      ],
+      handoff: {
+        prompt: "Recover the latest specialist handoff before resuming review.",
+        files: {
+          "src/session.tsx": { start: 10, end: 15 },
+          "src/backlog.ts": null,
+        },
+      },
+    })
+
+    expect(snapshot).toMatchObject({
+      specialist: {
+        playbook: "parallel-delivery",
+        skills: ["qa-gate", "spec-guard"],
+      },
+      handoff: {
+        prompt: "Recover the latest specialist handoff before resuming review.",
+      },
+    })
+
+    const restored = backlog.resolveSpecialistFallback({
+      agents: [],
+      handoff: { prompt: "", files: undefined },
+      snapshot,
+    })
+    const live = backlog.resolveSpecialistFallback({
+      agents: [
+        {
+          name: "implementor",
+          description: "Live agent",
+          mode: "task",
+          active: true,
+          uses: 1,
+          commands: 1,
+        },
+      ],
+      handoff: {
+        prompt: "Use the live specialist state instead.",
+        files: { "src/live.ts": null },
+      },
+      snapshot,
+    })
+
+    expect(restored.source).toBe("persisted")
+    expect(restored.agents[0]?.name).toBe("planner")
+    expect(restored.handoff?.prompt).toContain("specialist handoff")
+    expect(restored.handoff?.files).toEqual({
+      "src/session.tsx": { start: 10, end: 15 },
+      "src/backlog.ts": null,
+    })
+    expect(live.source).toBe("live")
+    expect(live.agents[0]?.name).toBe("implementor")
+    expect(live.handoff?.files).toEqual({ "src/live.ts": null })
+  })
+
+  test("persists and clears specialist snapshots per canonical workspace session", () => {
+    const snapshot = backlog.buildSpecialistSnapshot({
+      sessionID: "s-specialist",
+      title: "Recovered specialist",
+      updatedAt: 25,
+      template: "feature-launch",
+      playbook: "parallel-delivery",
+      skills: ["qa-gate"],
+      agents: [],
+      handoff: {
+        prompt: "Recover the latest specialist handoff before resuming review.",
+        files: { "src/session.tsx": null },
+      },
+    })
+
+    expect(snapshot).toBeDefined()
+
+    createRoot((dispose) => {
+      const specialist = backlog.createWorkspaceSpecialist(() => "/private/var/tmp/hyperion/", () => "s-specialist")
+      expect(specialist.ready()).toBe(true)
+      specialist.remember(snapshot!)
+      dispose()
+    })
+
+    createRoot((dispose) => {
+      const specialist = backlog.createWorkspaceSpecialist(() => "/var/tmp/hyperion", () => "s-specialist")
+      expect(specialist.latest()?.specialist.playbook).toBe("parallel-delivery")
+      expect(specialist.latest()?.handoff?.files[0]?.path).toBe("src/session.tsx")
+      specialist.clear()
+      dispose()
+    })
+
+    createRoot((dispose) => {
+      const specialist = backlog.createWorkspaceSpecialist(() => "/var/tmp/hyperion", () => "s-specialist")
+      expect(specialist.latest()).toBeUndefined()
       dispose()
     })
   })

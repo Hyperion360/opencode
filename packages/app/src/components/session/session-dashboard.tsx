@@ -5,7 +5,7 @@ import { Button } from "@opencode-ai/ui/button"
 import { Card } from "@opencode-ai/ui/card"
 import { Icon } from "@opencode-ai/ui/icon"
 import { Tag } from "@opencode-ai/ui/tag"
-import { buildMetricTrends, buildMetricsReadiness, type Board, type DeliveryPacket, type GraphNode, type IntegrationPayloads, type KitEvent, type KitPlaybook, type KitSkill, type KitTemplate, type MetricsSnapshot, type RunRecovery, type SpecReview } from "@/pages/session/backlog"
+import { buildMetricTrends, buildMetricsReadiness, type Board, type DeliveryPacket, type GraphNode, type IntegrationPayloads, type KitEvent, type KitPlaybook, type KitSkill, type KitTemplate, type MetricsSnapshot, type RunRecovery, type SpecialistFallback, type SpecReview } from "@/pages/session/backlog"
 
 const tone = (value: string) => {
   if (value === "ready" || value === "success" || value === "completed") return "bg-emerald-500/15 text-emerald-300"
@@ -30,6 +30,8 @@ const change = (value?: number, direction?: "up" | "down" | "flat" | "baseline")
 
 export function SessionDashboard(props: {
   board: Board
+  agentBoard: Board["agent"]["board"]
+  specialist?: SpecialistFallback
   review: SpecReview
   delivery: DeliveryPacket
   integration: Pick<IntegrationPayloads, "pr" | "ci" | "issue">
@@ -60,6 +62,7 @@ export function SessionDashboard(props: {
   const readiness = createMemo(() => buildMetricsReadiness({ board: props.board, review: props.review, delivery: props.delivery, snapshot: props.metrics }))
   const currentMetric = createMemo(() => props.metrics ?? props.metricHistory?.latest)
   const trends = createMemo(() => buildMetricTrends({ board: props.board, previous: props.metricHistory?.previous, source: props.metrics ? "workspace" : "live" }))
+  const specialistFiles = createMemo(() => Object.keys(props.specialist?.handoff?.files ?? {}).length)
   const hooks = createMemo(() => [
     {
       kind: "pr" as const,
@@ -404,8 +407,34 @@ export function SessionDashboard(props: {
                 </div>
               )}
             </Show>
+            <Show when={props.specialist}>
+              {(item) => (
+                <div data-specialist-snapshot class="rounded-lg border border-border-weak px-3 py-3 bg-background-base/60 flex flex-col gap-2">
+                  <div class="flex items-center gap-2 flex-wrap text-11-regular text-text-weak">
+                    <Tag class="px-2 py-1 bg-background-strong text-text-strong">
+                      {item().source === "persisted" ? "saved specialist snapshot" : "live + saved specialist snapshot"}
+                    </Tag>
+                    <Show when={item().updatedAt}>
+                      {(value) => <span>{DateTime.fromMillis(value()).toRelative() ?? "now"}</span>}
+                    </Show>
+                    <Show when={item().stored?.playbook}>
+                      <span>saved playbook context</span>
+                    </Show>
+                    <Show when={(item().stored?.skills.length ?? 0) > 0}>
+                      <span>{item().stored?.skills.length ?? 0} saved skill packs</span>
+                    </Show>
+                  </div>
+                  <Show when={item().handoff?.prompt}>
+                    {(value) => <div class="text-11-regular text-text-strong whitespace-pre-wrap">{value()}</div>}
+                  </Show>
+                  <Show when={specialistFiles() > 0}>
+                    <div class="text-11-regular text-text-weak">{specialistFiles()} handoff file{specialistFiles() === 1 ? "" : "s"} restored for fallback review context.</div>
+                  </Show>
+                </div>
+              )}
+            </Show>
             <div class="grid gap-2 md:grid-cols-2">
-              <For each={props.board.agent.board}>
+              <For each={props.agentBoard}>
                 {(agent) => (
                   <div class="rounded-lg border border-border-weak px-3 py-2">
                     <div class="flex items-center justify-between gap-2">
