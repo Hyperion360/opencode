@@ -5,7 +5,7 @@ import { Button } from "@opencode-ai/ui/button"
 import { Card } from "@opencode-ai/ui/card"
 import { Icon } from "@opencode-ai/ui/icon"
 import { Tag } from "@opencode-ai/ui/tag"
-import type { Board, GraphNode, KitEvent, KitPlaybook, KitSkill, KitTemplate, RunRecovery, SpecReview } from "@/pages/session/backlog"
+import type { Board, DeliveryPacket, GraphNode, KitEvent, KitPlaybook, KitSkill, KitTemplate, RunRecovery, SpecReview } from "@/pages/session/backlog"
 
 const tone = (value: string) => {
   if (value === "ready" || value === "success" || value === "completed") return "bg-emerald-500/15 text-emerald-300"
@@ -24,12 +24,15 @@ const action = (item: KitEvent) => {
 export function SessionDashboard(props: {
   board: Board
   review: SpecReview
+  delivery: DeliveryPacket
   template?: KitTemplate
   playbook?: KitPlaybook
   skills: KitSkill[]
   history: KitEvent[]
   recovery?: RunRecovery
   onRetry: (id: string) => void
+  onCopyDelivery: () => void
+  onExportDelivery: () => void
   onStageRecovery: () => void
   onStagePlaybook: () => void
 }) {
@@ -138,6 +141,61 @@ export function SessionDashboard(props: {
                 )}
               </For>
             </Show>
+          </div>
+        </Card>
+
+        <Card class="p-4 flex flex-col gap-3" data-delivery-export-surface>
+          <div class="flex items-start justify-between gap-3 flex-wrap">
+            <div class="flex items-center gap-2">
+              <Icon name="checklist" size="small" />
+              <div>
+                <div class="text-14-medium text-text-strong">Delivery checklist export</div>
+                <div class="text-12-regular text-text-weak">{props.delivery.summary}</div>
+              </div>
+            </div>
+            <div class="flex items-center gap-2 flex-wrap">
+              <Button variant="ghost" size="small" onClick={props.onCopyDelivery}>
+                Copy packet
+              </Button>
+              <Button variant="secondary" size="small" onClick={props.onExportDelivery}>
+                Export packet
+              </Button>
+            </div>
+          </div>
+          <div class="grid gap-2 lg:grid-cols-2">
+            <For each={props.delivery.checklist}>
+              {(item) => (
+                <div data-delivery-checklist={item.id} class="rounded-lg border border-border-weak px-3 py-3 bg-background-strong/40 flex flex-col gap-2">
+                  <div class="flex items-center justify-between gap-2">
+                    <div class="text-12-medium text-text-strong">{item.label}</div>
+                    <Tag class={`px-2 py-1 ${tone(item.state)}`}>{item.state}</Tag>
+                  </div>
+                  <div class="text-11-regular text-text-weak">{item.detail}</div>
+                </div>
+              )}
+            </For>
+          </div>
+          <div class="flex items-center justify-between gap-2 flex-wrap">
+            <div class="text-12-medium text-text-strong">Artifact cards</div>
+            <Tag class="px-2 py-1 bg-background-strong text-text-strong">{props.delivery.artifacts.length} cards</Tag>
+          </div>
+          <div class="grid gap-2 lg:grid-cols-3">
+            <For each={props.delivery.artifacts}>
+              {(item) => (
+                <div data-delivery-artifact={item.id} class="rounded-lg border border-border-weak px-3 py-3 bg-background-base/60 flex flex-col gap-2">
+                  <div class="flex items-center justify-between gap-2">
+                    <div class="text-12-medium text-text-strong">{item.title}</div>
+                    <Tag class={`px-2 py-1 ${tone(item.tone)}`}>{item.tone}</Tag>
+                  </div>
+                  <div class="text-11-regular text-text-weak">{item.detail}</div>
+                  <Show when={item.facts.length > 0}>
+                    <div class="flex flex-col gap-1 text-11-regular text-text-weaker">
+                      <For each={item.facts}>{(fact) => <div>• {fact}</div>}</For>
+                    </div>
+                  </Show>
+                </div>
+              )}
+            </For>
           </div>
         </Card>
 

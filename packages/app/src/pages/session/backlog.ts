@@ -168,6 +168,30 @@ export type SpecReview = {
   risks: ReviewerRisk[]
 }
 
+export type DeliveryChecklist = {
+  id: string
+  label: string
+  state: "ready" | "warning" | "blocked"
+  detail: string
+}
+
+export type DeliveryArtifact = {
+  id: string
+  title: string
+  tone: Activity["tone"]
+  detail: string
+  facts: string[]
+}
+
+export type DeliveryPacket = {
+  title: string
+  name: string
+  summary: string
+  checklist: DeliveryChecklist[]
+  artifacts: DeliveryArtifact[]
+  body: string
+}
+
 export type SpecSnapshot = {
   ready: boolean
   state?: LivingSpecStatus
@@ -530,6 +554,29 @@ const risk = (id: string, title: string, detail: string, tone: ReviewerRisk["ton
   tone,
 }) satisfies ReviewerRisk
 
+const delivery = (id: string, label: string, state: DeliveryChecklist["state"], detail: string) => ({
+  id,
+  label,
+  state,
+  detail,
+}) satisfies DeliveryChecklist
+
+const artifact = (id: string, title: string, detail: string, tone: DeliveryArtifact["tone"], facts: string[]) => ({
+  id,
+  title,
+  detail,
+  tone,
+  facts,
+}) satisfies DeliveryArtifact
+
+const deliveryTone = (state: DeliveryChecklist["state"]): DeliveryArtifact["tone"] => {
+  if (state === "ready") return "success"
+  if (state === "blocked") return "danger"
+  return "warning"
+}
+
+const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "session"
+
 const approvalSignals = (board: Board) =>
   [
     board.delivery.files > 0 ? `${board.delivery.files} changed file${board.delivery.files === 1 ? " is" : "s are"} already attached to the recovered snapshot` : undefined,
@@ -704,6 +751,109 @@ export function buildSpecReview(input: { board: Board; spec?: SpecSnapshot }) {
     signals,
     risks,
   } satisfies SpecReview
+}
+
+export function buildDeliveryPacket(input: { title?: string; board: Board; review: SpecReview; diffs: FileDiff[]; now?: number }) {
+  const title = text(input.title) ?? "Session delivery packet"
+  const stamp = new Date(input.now ?? Date.now()).toISOString()
+  const verifyState =
+    input.board.verification.state === "ready"
+      ? "ready"
+      : input.board.verification.state === "blocked"
+        ? "blocked"
+        : "warning"
+  const handoffState =
+    input.review.risks.some((item) => item.tone === "danger")
+      ? "blocked"
+      : input.review.risks.length > 0 || !input.board.delivery.rollback
+        ? "warning"
+        : "ready"
+  const spec = delivery("spec", "Spec review", input.review.state, `${input.review.label}. ${input.review.summary}`)
+  const validation = delivery("validation", "Validation evidence", verifyState, input.board.verification.summary)
+  const changes = delivery(
+    "changes",
+    "Diff package",
+    input.board.delivery.files > 0 ? "ready" : "warning",
+    input.board.delivery.files > 0
+      ? `${plural(input.board.delivery.files, "changed file")} attached with ${input.board.delivery.additions}+ / ${input.board.delivery.deletions}-.`
+      : "No changed files are attached to the current handoff yet.",
+  )
+  const handoff = delivery(
+    "handoff",
+    "Handoff context",
+    handoffState,
+    input.review.risks.length > 0
+      ? `${plural(input.review.risks.length, "reviewer risk")} remain open before handoff.`
+      : input.board.delivery.rollback
+        ? "Rollback visibility and reviewer context are both present."
+        : "Reviewer context is present, but rollback evidence is not visible yet.",
+  )
+  const checklist = [spec, validation, changes, handoff]
+  const artifacts = [
+    artifact(
+      "diffs",
+      "Diff summary",
+      input.board.delivery.files > 0
+        ? `${plural(input.board.delivery.files, "file")} changed with ${input.board.delivery.additions} additions and ${input.board.delivery.deletions} deletions.`
+        : "No delivery diff is attached yet.",
+      deliveryTone(changes.state),
+      input.diffs.slice(0, 4).map((item) => `${item.file} (+${item.additions}/-${item.deletions})`),
+    ),
+    artifact(
+      "validation",
+      "Validation evidence",
+      `${input.board.verification.summary} ${input.board.verification.artifacts > 0 ? `${plural(input.board.verification.artifacts, "artifact")} are visible.` : "No artifacts are attached."}`,
+      deliveryTone(validation.state),
+      input.board.verification.checks.slice(0, 4).map((item) => `${item.title}: ${item.status}${item.attachments > 0 ? ` · ${item.attachments} artifacts` : ""}`),
+    ),
+    artifact(
+      "handoff",
+      "Handoff context",
+      input.review.summary,
+      deliveryTone(handoff.state),
+      input.review.risks.length > 0
+        ? input.review.risks.slice(0, 4).map((item) => item.title)
+        : input.review.signals.slice(0, 3).map((item) => `${item.label}: ${item.tone}`),
+    ),
+  ]
+  const ready = checklist.filter((item) => item.state === "ready").length
+  const summary = `${ready} of ${checklist.length} delivery checks are ready.`
+  const body = [
+    `# ${title}`,
+    "",
+    `Generated: ${stamp}`,
+    `Summary: ${summary}`,
+    "",
+    "## Delivery checklist",
+    ...checklist.map((item) => `- ${item.state.toUpperCase()} · ${item.label}: ${item.detail}`),
+    "",
+    "## Artifact cards",
+    ...artifacts.flatMap((item) => [
+      `### ${item.title}`,
+      item.detail,
+      ...(item.facts.length > 0 ? item.facts.map((fact) => `- ${fact}`) : ["- No artifact highlights attached."]),
+      "",
+    ]),
+    "## Validation checks",
+    ...(input.board.verification.checks.length > 0
+      ? input.board.verification.checks.map((item) => `- ${item.title} · ${item.status} · ${item.detail}`)
+      : ["- No validation checks are attached yet."]),
+    "",
+    "## Changed files",
+    ...(input.diffs.length > 0
+      ? input.diffs.slice(0, 20).map((item) => `- ${item.file} (+${item.additions}/-${item.deletions})`)
+      : ["- No changed files are attached yet."]),
+    ...(input.diffs.length > 20 ? [`- ${input.diffs.length - 20} additional files omitted from this export.`] : []),
+  ].join("\n")
+
+  return {
+    title,
+    name: `${slug(title)}-delivery-packet.md`,
+    summary,
+    checklist,
+    artifacts,
+    body,
+  } satisfies DeliveryPacket
 }
 
 export function buildBoard(input: {

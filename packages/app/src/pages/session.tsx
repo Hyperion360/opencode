@@ -56,6 +56,7 @@ import { terminalTabLabel } from "@/pages/session/terminal-label"
 import { MessageTimeline } from "@/pages/session/message-timeline"
 import {
   buildBoard,
+  buildDeliveryPacket,
   buildSpecReview,
   buildApprovalPrompt,
   buildRecoveryPrompt,
@@ -833,9 +834,56 @@ export default function Page() {
         : { ready: false },
     })
   })
+  const delivery = createMemo(() =>
+    buildDeliveryPacket({
+      title: info()?.title ?? params.id ?? "Session delivery packet",
+      board: board(),
+      review: review(),
+      diffs: diffs(),
+    }),
+  )
 
   const stagePrompt = (value: string) => {
     prompt.set([{ type: "text", content: value, start: 0, end: value.length }], value.length)
+  }
+
+  const exportDelivery = () => {
+    const packet = delivery()
+    const blob = new Blob([packet.body], { type: "text/markdown;charset=utf-8" })
+    const href = window.URL.createObjectURL(blob)
+    const link = document.createElement("a")
+    link.href = href
+    link.download = packet.name
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(href)
+    showToast({
+      variant: "success",
+      icon: "circle-check",
+      title: "Delivery packet exported",
+      description: packet.name,
+    })
+  }
+
+  const copyDelivery = () => {
+    const packet = delivery()
+    navigator.clipboard
+      .writeText(packet.body)
+      .then(() => {
+        showToast({
+          variant: "success",
+          icon: "circle-check",
+          title: "Delivery packet copied",
+          description: packet.name,
+        })
+      })
+      .catch((err: unknown) => {
+        showToast({
+          title: language.t("common.requestFailed"),
+          description: errorMessage(err),
+        })
+      })
   }
 
   const stagePlaybook = () => {
@@ -1165,6 +1213,17 @@ export default function Page() {
       <div class="text-14-regular text-text-weak max-w-56">{language.t("session.review.noChanges")}</div>
     </div>
   )
+  const deliveryActions = () =>
+    params.id ? (
+      <div data-delivery-review-actions class="flex items-center gap-2">
+        <Button variant="ghost" size="small" onClick={copyDelivery}>
+          Copy packet
+        </Button>
+        <Button variant="secondary" size="small" onClick={exportDelivery}>
+          Export packet
+        </Button>
+      </div>
+    ) : undefined
 
   const reviewContent = (input: {
     diffStyle: DiffStyle
@@ -1177,6 +1236,7 @@ export default function Page() {
       <Match when={store.changes === "turn" && !!params.id}>
         <SessionReviewTab
           title={changesTitle()}
+          actions={deliveryActions()}
           empty={emptyTurn()}
           diffs={reviewDiffs}
           view={view}
@@ -1199,6 +1259,7 @@ export default function Page() {
         >
           <SessionReviewTab
             title={changesTitle()}
+            actions={deliveryActions()}
             diffs={reviewDiffs}
             view={view}
             diffStyle={input.diffStyle}
@@ -1217,6 +1278,7 @@ export default function Page() {
       <Match when={true}>
         <SessionReviewTab
           title={changesTitle()}
+          actions={deliveryActions()}
           empty={
             store.changes === "turn" ? (
               emptyTurn()
@@ -1771,12 +1833,15 @@ export default function Page() {
                 <SessionDashboard
                   board={board()}
                   review={review()}
+                  delivery={delivery()}
                   template={selectedTemplate()}
                   playbook={selectedPlaybook()}
                   skills={selectedSkills()}
                   history={kit.history()}
                   recovery={recovery()}
                   onRetry={retryNode}
+                  onCopyDelivery={copyDelivery}
+                  onExportDelivery={exportDelivery}
                   onStageRecovery={stageRecovery}
                   onStagePlaybook={stagePlaybook}
                 />

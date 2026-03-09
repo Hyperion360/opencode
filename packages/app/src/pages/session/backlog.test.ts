@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { applyTemplate, buildApprovalPrompt, buildBoard, buildPlaybookPrompt, buildRecoveryPrompt, buildResumePrompt, buildReviewPrompt, buildRetryPrompt, buildSpecReview, kitTemplates } from "./backlog"
+import { applyTemplate, buildApprovalPrompt, buildBoard, buildDeliveryPacket, buildPlaybookPrompt, buildRecoveryPrompt, buildResumePrompt, buildReviewPrompt, buildRetryPrompt, buildSpecReview, kitTemplates } from "./backlog"
 
 describe("session backlog helpers", () => {
   test("applies a template as structured intake", () => {
@@ -224,6 +224,74 @@ describe("session backlog helpers", () => {
     )
   })
 
+  test("builds a delivery packet with checklist state and artifact summaries", () => {
+    const board = buildBoard({
+      session: {
+        id: "s7",
+        slug: "s7",
+        projectID: "p1",
+        directory: "/tmp/app",
+        title: "Run",
+        version: "1",
+        time: { created: 0, updated: 0 },
+        revert: { messageID: "m1" },
+      },
+      status: { type: "idle" },
+      todos: [{ id: "t1", content: "Deliver", status: "completed", priority: "high" }],
+      diffs: [
+        { file: "src/app.ts", before: "a", after: "b", additions: 3, deletions: 1, status: "modified" },
+        { file: "src/review.ts", before: "a", after: "b", additions: 2, deletions: 0, status: "modified" },
+      ],
+      messages: [{ id: "m1", sessionID: "s7", role: "assistant", time: { created: 10 }, parentID: "u1", modelID: "m", providerID: "p", mode: "default", agent: "implementor", path: { cwd: "/tmp/app", root: "/tmp/app" }, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }],
+      parts: [{ id: "p1", sessionID: "s7", messageID: "m1", type: "tool", callID: "c1", tool: "test", state: { status: "completed", input: { command: "bun run test:unit" }, output: "12 pass", title: "Unit tests", metadata: {}, time: { start: 10, end: 11 }, attachments: [] } }],
+      agents: [{ name: "implementor", mode: "primary", permission: [], options: {} }],
+      commands: [],
+      now: 120_000,
+    })
+    const review = buildSpecReview({
+      board,
+      spec: {
+        ready: true,
+        state: "approved",
+        input: {
+          goal: "Ship delivery packet",
+          constraints: "keep accepted validation drawer",
+          acceptance: "export delivery packet",
+        },
+      },
+    })
+    const packet = buildDeliveryPacket({
+      title: "Reviewer handoff",
+      board,
+      review,
+      diffs: [
+        { file: "src/app.ts", before: "a", after: "b", additions: 3, deletions: 1, status: "modified" },
+        { file: "src/review.ts", before: "a", after: "b", additions: 2, deletions: 0, status: "modified" },
+      ],
+      now: 0,
+    })
+
+    expect(packet.name).toBe("reviewer-handoff-delivery-packet.md")
+    expect(packet.summary).toContain("delivery checks")
+    expect(packet.checklist).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "spec", state: "ready" }),
+        expect.objectContaining({ id: "validation", state: "ready" }),
+        expect.objectContaining({ id: "changes", state: "ready" }),
+        expect.objectContaining({ id: "handoff", state: "ready" }),
+      ]),
+    )
+    expect(packet.artifacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "diffs", facts: expect.arrayContaining(["src/app.ts (+3/-1)"]) }),
+        expect.objectContaining({ id: "validation", detail: expect.stringContaining("1 validation run passed") }),
+      ]),
+    )
+    expect(packet.body).toContain("## Delivery checklist")
+    expect(packet.body).toContain("## Artifact cards")
+    expect(packet.body).toContain("src/review.ts (+2/-0)")
+  })
+
   test("surfaces retry api errors in activity", () => {
     const board = buildBoard({
       session: {
@@ -305,5 +373,16 @@ describe("session backlog helpers", () => {
     expect(view).toContain("Reviewer risk list")
     expect(view).toContain("data-spec-compliance-state")
     expect(view).toContain("data-reviewer-risk")
+  })
+
+  test("keeps delivery export markers in the dashboard and review surfaces", async () => {
+    const dashboard = await Bun.file(new URL("../../components/session/session-dashboard.tsx", import.meta.url)).text()
+    const review = await Bun.file(new URL("./review-tab.tsx", import.meta.url)).text()
+
+    expect(dashboard).toContain("Delivery checklist export")
+    expect(dashboard).toContain("data-delivery-export-surface")
+    expect(dashboard).toContain("data-delivery-checklist")
+    expect(dashboard).toContain("data-delivery-artifact")
+    expect(review).toContain("actions={props.actions}")
   })
 })
