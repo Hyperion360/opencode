@@ -5,7 +5,7 @@ import { Button } from "@opencode-ai/ui/button"
 import { Card } from "@opencode-ai/ui/card"
 import { Icon } from "@opencode-ai/ui/icon"
 import { Tag } from "@opencode-ai/ui/tag"
-import type { Board, GraphNode, KitEvent, KitPlaybook, KitSkill, KitTemplate, RunRecovery } from "@/pages/session/backlog"
+import type { Board, GraphNode, KitEvent, KitPlaybook, KitSkill, KitTemplate, RunRecovery, SpecReview } from "@/pages/session/backlog"
 
 const tone = (value: string) => {
   if (value === "ready" || value === "success" || value === "completed") return "bg-emerald-500/15 text-emerald-300"
@@ -23,6 +23,7 @@ const action = (item: KitEvent) => {
 
 export function SessionDashboard(props: {
   board: Board
+  review: SpecReview
   template?: KitTemplate
   playbook?: KitPlaybook
   skills: KitSkill[]
@@ -94,6 +95,51 @@ export function SessionDashboard(props: {
             </Card>
           )}
         </Show>
+
+        <Card class="p-4 flex flex-col gap-3" data-spec-compliance-state={props.review.state}>
+          <div class="flex items-start justify-between gap-3 flex-wrap">
+            <div class="flex items-center gap-2">
+              <Icon name="checklist" size="small" />
+              <div>
+                <div class="text-14-medium text-text-strong">Spec compliance summary</div>
+                <div class="text-12-regular text-text-weak">{props.review.summary}</div>
+              </div>
+            </div>
+            <Tag class={`px-3 py-1 ${tone(props.review.state)}`}>{props.review.label}</Tag>
+          </div>
+          <div class="grid gap-2 lg:grid-cols-3">
+            <For each={props.review.signals}>
+              {(item) => (
+                <div data-spec-signal={item.id} class="rounded-lg border border-border-weak px-3 py-3 bg-background-strong/40 flex flex-col gap-2">
+                  <div class="flex items-center justify-between gap-2">
+                    <div class="text-12-medium text-text-strong">{item.label}</div>
+                    <Tag class={`px-2 py-1 ${tone(item.tone)}`}>{item.tone}</Tag>
+                  </div>
+                  <div class="text-11-regular text-text-weak">{item.detail}</div>
+                </div>
+              )}
+            </For>
+          </div>
+          <div class="rounded-lg border border-border-weak px-3 py-3 flex flex-col gap-2 bg-background-base/60">
+            <div class="text-12-medium text-text-strong">Reviewer risk list</div>
+            <Show
+              when={props.review.risks.length > 0}
+              fallback={<div class="text-11-regular text-text-weak">No open reviewer risks are derived from the current spec, validation, and delivery signals.</div>}
+            >
+              <For each={props.review.risks}>
+                {(item) => (
+                  <div data-reviewer-risk={item.id} class="rounded-lg border border-border-weak px-3 py-2 flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                      <div class="text-12-medium text-text-strong">{item.title}</div>
+                      <div class="text-11-regular text-text-weak mt-1">{item.detail}</div>
+                    </div>
+                    <Tag class={`px-2 py-1 shrink-0 ${tone(item.tone)}`}>{item.tone}</Tag>
+                  </div>
+                )}
+              </For>
+            </Show>
+          </div>
+        </Card>
 
         <div class="grid gap-4 xl:grid-cols-2">
           <Card class="p-4 flex flex-col gap-3">

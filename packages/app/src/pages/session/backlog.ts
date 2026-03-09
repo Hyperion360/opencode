@@ -3,7 +3,7 @@ import { createStore, produce } from "solid-js/store"
 import type { Agent, Command, FileDiff, Message, Part, Session, SessionStatus, Todo } from "@opencode-ai/sdk/v2"
 import { Persist, persisted } from "@/utils/persist"
 import { normalizeWorkspace } from "@/utils/workspace"
-import type { LivingSpecInput } from "./living-spec"
+import type { LivingSpecInput, LivingSpecStatus } from "./living-spec"
 
 const MAX_KIT_STORES = 20
 const MAX_RUN_STORES = 20
@@ -144,6 +144,34 @@ export type Board = {
     quality: number
     duration: number
   }
+}
+
+export type ReviewSignal = {
+  id: string
+  label: string
+  detail: string
+  tone: Activity["tone"]
+}
+
+export type ReviewerRisk = {
+  id: string
+  title: string
+  detail: string
+  tone: Activity["tone"]
+}
+
+export type SpecReview = {
+  state: "ready" | "warning" | "blocked"
+  label: string
+  summary: string
+  signals: ReviewSignal[]
+  risks: ReviewerRisk[]
+}
+
+export type SpecSnapshot = {
+  ready: boolean
+  state?: LivingSpecStatus
+  input?: LivingSpecInput
 }
 
 export type RunRecord = {
@@ -302,6 +330,8 @@ const messageTime = (message?: Message) => {
 const cut = (value: string, size: number) => (value.length <= size ? value : `${value.slice(0, size - 1).trimEnd()}…`)
 
 const lines = (value: string) => value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)
+
+const items = (value?: string) => lines(value ?? "").map((item) => item.replace(/^[-*•0-9.)\s]+/, "").trim()).filter(Boolean)
 
 const text = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : undefined)
 
@@ -484,6 +514,22 @@ const join = (items: string[]) => {
   return `${items.slice(0, -1).join(", ")}, and ${items.at(-1)}`
 }
 
+const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`
+
+const signal = (id: string, label: string, detail: string, tone: ReviewSignal["tone"]) => ({
+  id,
+  label,
+  detail,
+  tone,
+}) satisfies ReviewSignal
+
+const risk = (id: string, title: string, detail: string, tone: ReviewerRisk["tone"]) => ({
+  id,
+  title,
+  detail,
+  tone,
+}) satisfies ReviewerRisk
+
 const approvalSignals = (board: Board) =>
   [
     board.delivery.files > 0 ? `${board.delivery.files} changed file${board.delivery.files === 1 ? " is" : "s are"} already attached to the recovered snapshot` : undefined,
@@ -508,6 +554,156 @@ function resolveRunApproval(input: { board: Board; recovery: RunRecovery }) {
     label: "Stage approval checkpoint",
     risks,
   } satisfies RunApproval
+}
+
+export function buildSpecReview(input: { board: Board; spec?: SpecSnapshot }) {
+  const mode = input.spec?.state
+  const goal = text(input.spec?.input?.goal)
+  const constraints = items(input.spec?.input?.constraints)
+  const acceptance = items(input.spec?.input?.acceptance)
+  const loading = !input.spec || !input.spec.ready
+  const reviewing = input.board.delivery.files > 0 || input.board.execution.total > 0 || input.board.verification.total > 0 || input.board.activity.length > 0
+
+  const drift =
+    loading
+      ? signal("drift", "Spec drift", "Restoring the living spec state for this workspace.", "normal")
+      : mode === "approved"
+        ? signal("drift", "Spec drift", "Approved living spec matches the current workspace intake.", "success")
+        : mode === "stale"
+          ? signal("drift", "Spec drift", "Intake changed after the last approved revision, so reviewer sign-off may no longer match the requested scope.", "danger")
+          : mode === "draft"
+            ? signal("drift", "Spec drift", "A draft exists, but reviewers do not have an approved baseline yet.", "warning")
+            : goal || constraints.length > 0 || acceptance.length > 0
+              ? signal("drift", "Spec drift", "Intake is captured, but a reviewed draft still needs to be approved.", "warning")
+              : signal("drift", "Spec drift", "No living spec has been captured for this workspace yet.", reviewing ? "danger" : "warning")
+
+  const assumptions =
+    loading
+      ? signal("assumptions", "Assumptions", "Loading goal, constraints, and acceptance criteria.", "normal")
+      : !goal
+        ? signal("assumptions", "Assumptions", "No goal is recorded for this run yet.", reviewing ? "danger" : "warning")
+        : constraints.length === 0 && acceptance.length === 0
+          ? signal("assumptions", "Assumptions", "Constraints and acceptance criteria are both missing, so reviewers are relying on implicit assumptions.", reviewing ? "danger" : "warning")
+          : constraints.length === 0
+            ? signal("assumptions", "Assumptions", "No explicit constraints are recorded for reviewers.", "warning")
+            : acceptance.length === 0
+              ? signal("assumptions", "Assumptions", "No acceptance criteria are recorded for reviewers.", "warning")
+              : signal("assumptions", "Assumptions", `${plural(constraints.length, "constraint")} and ${acceptance.length === 1 ? "1 acceptance criterion" : `${acceptance.length} acceptance criteria`} are recorded for review.`, "success")
+
+  const evidence =
+    input.board.verification.state === "ready" && input.board.verification.total > 0
+      ? signal(
+          "evidence",
+          "Validation evidence",
+          `${input.board.verification.summary} ${input.board.verification.artifacts > 0 ? `${plural(input.board.verification.artifacts, "artifact")} attached.` : "No artifacts attached."}`,
+          "success",
+        )
+      : input.board.verification.state === "running"
+        ? signal("evidence", "Validation evidence", input.board.verification.summary, "warning")
+        : input.board.verification.state === "blocked"
+          ? signal("evidence", "Validation evidence", input.board.verification.summary, "danger")
+          : input.board.delivery.files > 0
+            ? signal("evidence", "Validation evidence", "The current diff set has no attached validation evidence yet.", "danger")
+            : signal("evidence", "Validation evidence", "No delivery diff is attached yet, so reviewer evidence is still pending.", "normal")
+
+  const risks = [
+    input.spec?.ready && mode === "stale"
+      ? risk(
+          "stale-spec",
+          "Spec drift requires a fresh approval",
+          "The current intake changed after the last approved revision, so the saved approval may no longer match the requested scope.",
+          "danger",
+        )
+      : undefined,
+    input.spec?.ready && input.board.delivery.files > 0 && mode !== "approved"
+      ? risk(
+          "unapproved-spec",
+          "Changes are present without an approved spec",
+          "Reviewers can inspect the diff, but the run does not currently have an approved living spec baseline to compare against.",
+          mode === "stale" ? "danger" : "warning",
+        )
+      : undefined,
+    input.spec?.ready && constraints.length === 0
+      ? risk(
+          "missing-constraints",
+          "Constraints are still implicit",
+          "No explicit constraints are recorded, so scope and safety assumptions still need manual review before handoff.",
+          "warning",
+        )
+      : undefined,
+    input.spec?.ready && acceptance.length === 0
+      ? risk(
+          "missing-acceptance",
+          "Acceptance evidence is underspecified",
+          "The living spec does not list acceptance criteria, so reviewers do not have an explicit checklist for sign-off.",
+          "warning",
+        )
+      : undefined,
+    input.board.delivery.files > 0 && input.board.verification.total === 0
+      ? risk(
+          "missing-validation",
+          "Validation evidence is missing",
+          "The diff set is non-empty, but no tests, typechecks, or review commands are attached to this run.",
+          "danger",
+        )
+      : undefined,
+    input.board.verification.failed > 0
+      ? risk("failed-validation", "Validation failures remain open", input.board.verification.summary, "danger")
+      : undefined,
+    input.board.verification.pending > 0
+      ? risk("pending-validation", "Validation is still in flight", input.board.verification.summary, "warning")
+      : undefined,
+    input.board.operations.retries > 0
+      ? risk(
+          "retries",
+          "Recovered execution needs reviewer attention",
+          `${plural(input.board.operations.retries, "recovery or retry signal")} were recorded for this run. Inspect why the run needed another pass before handoff.`,
+          "warning",
+        )
+      : undefined,
+    input.board.delivery.files > 0 && !input.board.delivery.rollback
+      ? risk(
+          "rollback",
+          "Rollback path is not visible yet",
+          "The run has attached changes, but rollback evidence is not yet surfaced in the delivery panel.",
+          "warning",
+        )
+      : undefined,
+    input.board.execution.parallel || input.board.agent.active > 1
+      ? risk(
+          "parallel",
+          "Parallel execution widened the review surface",
+          "Multiple nodes or agents were active in parallel, so reviewers should confirm combined output and validation coverage.",
+          "warning",
+        )
+      : undefined,
+  ].filter((item): item is ReviewerRisk => !!item)
+
+  const signals = [drift, assumptions, evidence]
+  const blocked = signals.some((item) => item.tone === "danger") || risks.some((item) => item.tone === "danger")
+  const warning = loading || signals.some((item) => item.tone === "warning") || risks.length > 0
+  const state = blocked ? "blocked" : warning ? "warning" : "ready"
+  const label = state === "blocked" ? "Review blocked" : state === "warning" ? "Review needs attention" : "Review aligned"
+  const summary =
+    state === "ready"
+      ? "Approved scope, explicit assumptions, and attached validation evidence leave no open reviewer risks."
+      : state === "blocked"
+        ? risks.length > 0
+          ? `${plural(risks.length, "reviewer risk")} need attention before handoff.`
+          : "The current spec or validation signals are not strong enough for reviewer handoff yet."
+        : loading
+          ? "Restoring spec context and reviewer signals for this workspace."
+          : risks.length > 0
+            ? `${plural(risks.length, "reviewer risk")} still need confirmation before handoff.`
+            : "Review signals are partially complete; confirm the remaining spec context before handoff."
+
+  return {
+    state,
+    label,
+    summary,
+    signals,
+    risks,
+  } satisfies SpecReview
 }
 
 export function buildBoard(input: {

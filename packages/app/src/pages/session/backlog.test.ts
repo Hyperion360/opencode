@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { applyTemplate, buildApprovalPrompt, buildBoard, buildPlaybookPrompt, buildRecoveryPrompt, buildResumePrompt, buildReviewPrompt, buildRetryPrompt, kitTemplates } from "./backlog"
+import { applyTemplate, buildApprovalPrompt, buildBoard, buildPlaybookPrompt, buildRecoveryPrompt, buildResumePrompt, buildReviewPrompt, buildRetryPrompt, buildSpecReview, kitTemplates } from "./backlog"
 
 describe("session backlog helpers", () => {
   test("applies a template as structured intake", () => {
@@ -128,6 +128,102 @@ describe("session backlog helpers", () => {
     })
   })
 
+  test("surfaces stale spec drift and missing reviewer evidence", () => {
+    const board = buildBoard({
+      session: {
+        id: "s5",
+        slug: "s5",
+        projectID: "p1",
+        directory: "/tmp/app",
+        title: "Run",
+        version: "1",
+        time: { created: 0, updated: 0 },
+      },
+      status: { type: "idle" },
+      todos: [{ id: "t1", content: "Ship dashboard", status: "completed", priority: "high" }],
+      diffs: [{ file: "src/app.ts", before: "a", after: "b", additions: 6, deletions: 1, status: "modified" }],
+      messages: [],
+      parts: [],
+      agents: [],
+      commands: [],
+      now: 120_000,
+    })
+
+    const review = buildSpecReview({
+      board,
+      spec: {
+        ready: true,
+        state: "stale",
+        input: {
+          goal: "Ship delivery review signals",
+          constraints: "keep layout intact",
+          acceptance: "show reviewer summary",
+        },
+      },
+    })
+
+    expect(review.state).toBe("blocked")
+    expect(review.signals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "drift", tone: "danger" }),
+        expect.objectContaining({ id: "evidence", tone: "danger" }),
+      ]),
+    )
+    expect(review.risks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "stale-spec", tone: "danger" }),
+        expect.objectContaining({ id: "missing-validation", tone: "danger" }),
+      ]),
+    )
+  })
+
+  test("marks reviewer summary ready when spec and evidence align", () => {
+    const board = buildBoard({
+      session: {
+        id: "s6",
+        slug: "s6",
+        projectID: "p1",
+        directory: "/tmp/app",
+        title: "Run",
+        version: "1",
+        time: { created: 0, updated: 0 },
+        revert: { messageID: "m1" },
+      },
+      status: { type: "idle" },
+      todos: [{ id: "t1", content: "Review", status: "completed", priority: "high" }],
+      diffs: [{ file: "src/app.ts", before: "a", after: "b", additions: 3, deletions: 1, status: "modified" }],
+      messages: [{ id: "m1", sessionID: "s6", role: "assistant", time: { created: 10 }, parentID: "u1", modelID: "m", providerID: "p", mode: "default", agent: "implementor", path: { cwd: "/tmp/app", root: "/tmp/app" }, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }],
+      parts: [{ id: "p1", sessionID: "s6", messageID: "m1", type: "tool", callID: "c1", tool: "test", state: { status: "completed", input: { command: "bun run test:unit" }, output: "12 pass", title: "Unit tests", metadata: {}, time: { start: 10, end: 11 }, attachments: [] } }],
+      agents: [{ name: "implementor", mode: "primary", permission: [], options: {} }],
+      commands: [],
+      now: 120_000,
+    })
+
+    const review = buildSpecReview({
+      board,
+      spec: {
+        ready: true,
+        state: "approved",
+        input: {
+          goal: "Ship reviewer summary",
+          constraints: "keep verification drawer\nno layout changes",
+          acceptance: "show spec summary\nshow reviewer risks",
+        },
+      },
+    })
+
+    expect(review.state).toBe("ready")
+    expect(review.risks).toHaveLength(0)
+    expect(review.summary).toContain("no open reviewer risks")
+    expect(review.signals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "drift", tone: "success" }),
+        expect.objectContaining({ id: "assumptions", tone: "success" }),
+        expect.objectContaining({ id: "evidence", tone: "success" }),
+      ]),
+    )
+  })
+
   test("surfaces retry api errors in activity", () => {
     const board = buildBoard({
       session: {
@@ -200,5 +296,14 @@ describe("session backlog helpers", () => {
     expect(view).toContain("data-validation-drawer")
     expect(view).toContain("Command provenance")
     expect(view).toContain("Condensed log summary")
+  })
+
+  test("keeps spec compliance summary markers in the dashboard rendering", async () => {
+    const view = await Bun.file(new URL("../../components/session/session-dashboard.tsx", import.meta.url)).text()
+
+    expect(view).toContain("Spec compliance summary")
+    expect(view).toContain("Reviewer risk list")
+    expect(view).toContain("data-spec-compliance-state")
+    expect(view).toContain("data-reviewer-risk")
   })
 })

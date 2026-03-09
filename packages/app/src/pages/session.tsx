@@ -56,6 +56,7 @@ import { terminalTabLabel } from "@/pages/session/terminal-label"
 import { MessageTimeline } from "@/pages/session/message-timeline"
 import {
   buildBoard,
+  buildSpecReview,
   buildApprovalPrompt,
   buildRecoveryPrompt,
   buildPlaybookPrompt,
@@ -72,6 +73,7 @@ import {
   resolveRunBoard,
   resolveRunRecovery,
 } from "@/pages/session/backlog"
+import { createLivingSpec, getLivingSpecStatus } from "@/pages/session/living-spec"
 import { useSessionCommands } from "@/pages/session/use-session-commands"
 import { SessionPromptDock } from "@/pages/session/session-prompt-dock"
 import { SessionMobileTabs } from "@/pages/session/session-mobile-tabs"
@@ -121,6 +123,7 @@ export default function Page() {
   const prompt = usePrompt()
   const comments = useComments()
   const permission = usePermission()
+  const spec = createLivingSpec(() => sdk.directory)
   const kit = createWorkspaceKit(() => sdk.directory)
   const runs = createWorkspaceRuns(() => sdk.directory)
 
@@ -813,6 +816,23 @@ export default function Page() {
       status: status(),
     }),
   )
+  const specStatus = createMemo(() => {
+    if (!spec.ready()) return
+    return getLivingSpecStatus(spec.state(), sdk.directory)
+  })
+  const review = createMemo(() => {
+    const value = specStatus()
+    return buildSpecReview({
+      board: board(),
+      spec: value
+        ? {
+            ready: true,
+            state: value.state,
+            input: spec.input(),
+          }
+        : { ready: false },
+    })
+  })
 
   const stagePrompt = (value: string) => {
     prompt.set([{ type: "text", content: value, start: 0, end: value.length }], value.length)
@@ -1750,6 +1770,7 @@ export default function Page() {
               <Match when={params.id}>
                 <SessionDashboard
                   board={board()}
+                  review={review()}
                   template={selectedTemplate()}
                   playbook={selectedPlaybook()}
                   skills={selectedSkills()}
