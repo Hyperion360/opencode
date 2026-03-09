@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { applyTemplate, buildApprovalPrompt, buildBoard, buildCiPayload, buildDeliveryPacket, buildIntegrationPayloads, buildMetricTrends, buildMetricsReadiness, buildMetricsSnapshot, buildNotificationPayload, buildPlaybookPrompt, buildPullRequestPayload, buildRecoveryPrompt, buildResumePrompt, buildReviewPrompt, buildRetryPrompt, buildSpecReview, kitTemplates } from "./backlog"
+import { applyTemplate, buildApprovalPrompt, buildBoard, buildCiPayload, buildDeliveryPacket, buildIntegrationPayloads, buildIntegrationStagePrompt, buildMetricTrends, buildMetricsReadiness, buildMetricsSnapshot, buildNotificationPayload, buildPlaybookPrompt, buildPullRequestPayload, buildRecoveryPrompt, buildResumePrompt, buildReviewPrompt, buildRetryPrompt, buildSpecReview, kitTemplates } from "./backlog"
 
 describe("session backlog helpers", () => {
   test("applies a template as structured intake", () => {
@@ -504,6 +504,110 @@ describe("session backlog helpers", () => {
     expect(approval.body).toContain("- Validation evidence is missing")
   })
 
+  test("builds stage-ready integration prompts with payload metadata and fallbacks", () => {
+    const diffs = [{ file: "src/app.ts", before: "a", after: "b", additions: 3, deletions: 1, status: "modified" as const }]
+    const board = buildBoard({
+      session: {
+        id: "s13",
+        slug: "s13",
+        projectID: "p1",
+        directory: "/tmp/app",
+        title: "Integration run",
+        version: "1",
+        time: { created: 0, updated: 0 },
+      },
+      status: { type: "idle" },
+      todos: [{ id: "t1", content: "Ship outbound hooks", status: "completed", priority: "high" }],
+      diffs,
+      messages: [],
+      parts: [],
+      agents: [],
+      commands: [],
+      now: 120_000,
+    })
+    const review = buildSpecReview({
+      board,
+      spec: {
+        ready: true,
+        state: "approved",
+        input: {
+          goal: "Ship hook actions",
+          constraints: "keep accepted delivery surfaces",
+          acceptance: "copy and stage payloads",
+        },
+      },
+    })
+    const delivery = buildDeliveryPacket({
+      title: "Integration run",
+      board,
+      review,
+      diffs,
+      now: 120_000,
+    })
+
+    const pr = buildPullRequestPayload({ sessionID: "s13", title: "Integration run", board, review, delivery, diffs })
+    const ci = buildCiPayload({
+      sessionID: "s14",
+      title: "Empty CI",
+      board: buildBoard({
+        session: {
+          id: "s14",
+          slug: "s14",
+          projectID: "p1",
+          directory: "/tmp/app",
+          title: "Empty CI",
+          version: "1",
+          time: { created: 0, updated: 0 },
+        },
+        status: { type: "idle" },
+        todos: [],
+        diffs: [],
+        messages: [],
+        parts: [],
+        agents: [],
+        commands: [],
+        now: 120_000,
+      }),
+      review,
+      delivery: buildDeliveryPacket({
+        title: "Empty CI",
+        board: buildBoard({
+          session: {
+            id: "s14",
+            slug: "s14",
+            projectID: "p1",
+            directory: "/tmp/app",
+            title: "Empty CI",
+            version: "1",
+            time: { created: 0, updated: 0 },
+          },
+          status: { type: "idle" },
+          todos: [],
+          diffs: [],
+          messages: [],
+          parts: [],
+          agents: [],
+          commands: [],
+          now: 120_000,
+        }),
+        review,
+        diffs: [],
+        now: 120_000,
+      }),
+      diffs: [],
+    })
+
+    const prPrompt = buildIntegrationStagePrompt({ payload: pr })
+    const ciPrompt = buildIntegrationStagePrompt({ payload: ci })
+
+    expect(prPrompt).toContain("Stage this pull request hook from the current session.")
+    expect(prPrompt).toContain("Changed files:")
+    expect(prPrompt).toContain("- src/app.ts (+3/-1)")
+    expect(prPrompt).toContain("Payload body:")
+    expect(ciPrompt).toContain("Validation checks:")
+    expect(ciPrompt).toContain("- No validation checks are attached yet.")
+  })
+
   test("builds dashboard readiness cues from a persisted metrics fallback", () => {
     const board = buildBoard({
       session: {
@@ -715,15 +819,24 @@ describe("session backlog helpers", () => {
     expect(view).toContain("data-reviewer-risk")
   })
 
-  test("keeps delivery export markers in the dashboard and review surfaces", async () => {
+  test("keeps delivery export and integration hook markers in the dashboard and review surfaces", async () => {
     const dashboard = await Bun.file(new URL("../../components/session/session-dashboard.tsx", import.meta.url)).text()
     const review = await Bun.file(new URL("./review-tab.tsx", import.meta.url)).text()
+    const page = await Bun.file(new URL("../session.tsx", import.meta.url)).text()
 
     expect(dashboard).toContain("Delivery checklist export")
     expect(dashboard).toContain("data-delivery-export-surface")
     expect(dashboard).toContain("data-delivery-checklist")
     expect(dashboard).toContain("data-delivery-artifact")
+    expect(dashboard).toContain("PR / CI / issue hooks")
+    expect(dashboard).toContain("data-integration-hooks-surface")
+    expect(dashboard).toContain("data-integration-hook")
     expect(review).toContain("actions={props.actions}")
+    expect(page).toContain("data-integration-review-actions")
+    expect(page).toContain("Copy PR")
+    expect(page).toContain("Stage CI")
+    expect(page).toContain("Stage issue")
+    expect(page).toContain("buildIntegrationStagePrompt")
   })
 
   test("keeps workspace metrics snapshot markers in the dashboard rendering", async () => {

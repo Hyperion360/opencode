@@ -347,6 +347,8 @@ export type IntegrationPayloads = {
   }
 }
 
+type IntegrationHookPayload = IntegrationPayloads["pr"] | IntegrationPayloads["ci"] | IntegrationPayloads["issue"]
+
 type IntegrationState = DeliveryChecklist["state"]
 
 type IntegrationInput = {
@@ -1221,6 +1223,42 @@ export function buildNotificationPayload(input: IntegrationInput & { event: Noti
       `Metrics: activation ${data.activation}% · quality ${data.quality}%`,
     ].join("\n"),
   } satisfies IntegrationNotificationPayload
+}
+
+const integrationMetadata = (payload: IntegrationHookPayload) => {
+  if ("files" in payload) {
+    return [
+      "Changed files:",
+      ...(payload.files.length > 0 ? payload.files.map((item) => `- ${item}`) : ["- No changed files are attached yet."]),
+    ]
+  }
+
+  if ("checks" in payload) {
+    return [
+      "Validation checks:",
+      ...(payload.checks.length > 0 ? payload.checks.map((item) => `- ${item}`) : ["- No validation checks are attached yet."]),
+    ]
+  }
+
+  return [
+    "Issue labels:",
+    ...(payload.labels.length > 0 ? payload.labels.map((item) => `- ${item}`) : ["- No issue labels are attached yet."]),
+  ]
+}
+
+export function buildIntegrationStagePrompt(input: { payload: IntegrationHookPayload }) {
+  return [
+    `Stage this ${input.payload.target.label.toLowerCase()} hook from the current session.`,
+    `Target: ${input.payload.target.label}`,
+    `Title: ${input.payload.title}`,
+    `Summary: ${input.payload.summary}`,
+    "",
+    "Hook metadata:",
+    ...integrationMetadata(input.payload),
+    "",
+    "Payload body:",
+    input.payload.body,
+  ].join("\n")
 }
 
 export function buildIntegrationPayloads(input: IntegrationInput) {

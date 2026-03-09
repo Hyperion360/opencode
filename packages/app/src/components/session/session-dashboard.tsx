@@ -5,7 +5,7 @@ import { Button } from "@opencode-ai/ui/button"
 import { Card } from "@opencode-ai/ui/card"
 import { Icon } from "@opencode-ai/ui/icon"
 import { Tag } from "@opencode-ai/ui/tag"
-import { buildMetricTrends, buildMetricsReadiness, type Board, type DeliveryPacket, type GraphNode, type KitEvent, type KitPlaybook, type KitSkill, type KitTemplate, type MetricsSnapshot, type RunRecovery, type SpecReview } from "@/pages/session/backlog"
+import { buildMetricTrends, buildMetricsReadiness, type Board, type DeliveryPacket, type GraphNode, type IntegrationPayloads, type KitEvent, type KitPlaybook, type KitSkill, type KitTemplate, type MetricsSnapshot, type RunRecovery, type SpecReview } from "@/pages/session/backlog"
 
 const tone = (value: string) => {
   if (value === "ready" || value === "success" || value === "completed") return "bg-emerald-500/15 text-emerald-300"
@@ -32,6 +32,7 @@ export function SessionDashboard(props: {
   board: Board
   review: SpecReview
   delivery: DeliveryPacket
+  integration: Pick<IntegrationPayloads, "pr" | "ci" | "issue">
   metrics?: MetricsSnapshot
   metricHistory?: {
     latest?: MetricsSnapshot
@@ -45,6 +46,8 @@ export function SessionDashboard(props: {
   onRetry: (id: string) => void
   onCopyDelivery: () => void
   onExportDelivery: () => void
+  onCopyIntegration: (kind: "pr" | "ci" | "issue") => void
+  onStageIntegration: (kind: "pr" | "ci" | "issue") => void
   onStageRecovery: () => void
   onStagePlaybook: () => void
 }) {
@@ -57,6 +60,23 @@ export function SessionDashboard(props: {
   const readiness = createMemo(() => buildMetricsReadiness({ board: props.board, review: props.review, delivery: props.delivery, snapshot: props.metrics }))
   const currentMetric = createMemo(() => props.metrics ?? props.metricHistory?.latest)
   const trends = createMemo(() => buildMetricTrends({ board: props.board, previous: props.metricHistory?.previous, source: props.metrics ? "workspace" : "live" }))
+  const hooks = createMemo(() => [
+    {
+      kind: "pr" as const,
+      payload: props.integration.pr,
+      detail: props.integration.pr.files[0] ?? "No changed files are attached yet.",
+    },
+    {
+      kind: "ci" as const,
+      payload: props.integration.ci,
+      detail: props.integration.ci.checks[0] ?? "No validation checks are attached yet.",
+    },
+    {
+      kind: "issue" as const,
+      payload: props.integration.issue,
+      detail: props.integration.issue.labels[0] ?? "No issue labels are attached yet.",
+    },
+  ])
 
   const open = (id?: string) => {
     if (!id) return
@@ -208,6 +228,42 @@ export function SessionDashboard(props: {
                       <For each={item.facts}>{(fact) => <div>• {fact}</div>}</For>
                     </div>
                   </Show>
+                </div>
+              )}
+            </For>
+          </div>
+        </Card>
+
+        <Card class="p-4 flex flex-col gap-3" data-integration-hooks-surface>
+          <div class="flex items-start justify-between gap-3 flex-wrap">
+            <div class="flex items-center gap-2">
+              <Icon name="share" size="small" />
+              <div>
+                <div class="text-14-medium text-text-strong">PR / CI / issue hooks</div>
+                <div class="text-12-regular text-text-weak">Copy or stage outbound hook payloads directly from the accepted delivery and review state.</div>
+              </div>
+            </div>
+            <Tag class="px-2 py-1 bg-background-strong text-text-strong">demoable outbound actions</Tag>
+          </div>
+          <div class="grid gap-2 lg:grid-cols-3">
+            <For each={hooks()}>
+              {(item) => (
+                <div data-integration-hook={item.kind} class="rounded-lg border border-border-weak px-3 py-3 bg-background-strong/40 flex flex-col gap-3">
+                  <div class="flex items-center justify-between gap-2 flex-wrap">
+                    <div class="text-12-medium text-text-strong">{item.payload.target.label}</div>
+                    <Tag class={`px-2 py-1 ${tone(item.payload.state)}`}>{item.payload.state}</Tag>
+                  </div>
+                  <div class="text-11-regular text-text-weak">{item.payload.target.description}</div>
+                  <div class="text-11-regular text-text-weaker">{item.payload.summary}</div>
+                  <div class="text-11-regular text-text-weaker">{item.detail}</div>
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <Button variant="ghost" size="small" data-integration-action={`${item.kind}:copy`} onClick={() => props.onCopyIntegration(item.kind)}>
+                      Copy payload
+                    </Button>
+                    <Button variant="secondary" size="small" data-integration-action={`${item.kind}:stage`} onClick={() => props.onStageIntegration(item.kind)}>
+                      Stage payload
+                    </Button>
+                  </div>
                 </div>
               )}
             </For>

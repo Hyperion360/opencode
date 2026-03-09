@@ -57,6 +57,8 @@ import { MessageTimeline } from "@/pages/session/message-timeline"
 import {
   buildBoard,
   buildDeliveryPacket,
+  buildIntegrationPayloads,
+  buildIntegrationStagePrompt,
   buildMetricsSnapshot,
   buildSpecReview,
   buildApprovalPrompt,
@@ -70,6 +72,7 @@ import {
   createWorkspaceMetrics,
   createWorkspaceRuns,
   hasRunState,
+  integrationTargets,
   kitPlaybooks,
   kitSkills,
   kitTemplates,
@@ -596,6 +599,7 @@ export default function Page() {
     activeTerminalDraggable: undefined as string | undefined,
     expanded: {} as Record<string, boolean>,
     messageId: undefined as string | undefined,
+    hook: "pr" as "pr" | "ci" | "issue",
     turnStart: 0,
     mobileTab: "session" as "session" | "changes",
     changes: "session" as "session" | "turn",
@@ -870,6 +874,18 @@ export default function Page() {
       diffs: diffs(),
     }),
   )
+  const integration = createMemo(() =>
+    buildIntegrationPayloads({
+      sessionID: params.id,
+      title: info()?.title,
+      board: board(),
+      review: review(),
+      delivery: delivery(),
+      diffs: diffs(),
+      metrics: metric(),
+      recovery: recovery(),
+    }),
+  )
 
   const stagePrompt = (value: string) => {
     prompt.set([{ type: "text", content: value, start: 0, end: value.length }], value.length)
@@ -912,6 +928,37 @@ export default function Page() {
           description: errorMessage(err),
         })
       })
+  }
+
+  const copyIntegration = (kind: "pr" | "ci" | "issue") => {
+    const payload = integration()[kind]
+    navigator.clipboard
+      .writeText(payload.body)
+      .then(() => {
+        showToast({
+          variant: "success",
+          icon: "circle-check",
+          title: `${payload.target.label} payload copied`,
+          description: payload.title,
+        })
+      })
+      .catch((err: unknown) => {
+        showToast({
+          title: language.t("common.requestFailed"),
+          description: errorMessage(err),
+        })
+      })
+  }
+
+  const stageIntegration = (kind: "pr" | "ci" | "issue") => {
+    const payload = integration()[kind]
+    stagePrompt(buildIntegrationStagePrompt({ payload }))
+    showToast({
+      variant: "success",
+      icon: "circle-check",
+      title: `${payload.target.label} payload staged`,
+      description: payload.title,
+    })
   }
 
   const stagePlaybook = () => {
@@ -1027,6 +1074,7 @@ export default function Page() {
         setStore("messageId", undefined)
         setStore("expanded", {})
         setStore("changes", "session")
+        setStore("hook", "pr")
         setUi("autoCreated", false)
       },
       { defer: true },
@@ -1261,6 +1309,13 @@ export default function Page() {
       <div class="text-14-regular text-text-weak max-w-56">{language.t("session.review.noChanges")}</div>
     </div>
   )
+
+  const reviewHookAction = createMemo(() => {
+    if (store.hook === "pr") return { label: "Copy PR", run: () => copyIntegration("pr") }
+    if (store.hook === "ci") return { label: "Stage CI", run: () => stageIntegration("ci") }
+    return { label: "Stage issue", run: () => stageIntegration("issue") }
+  })
+
   const deliveryActions = () =>
     params.id ? (
       <div data-delivery-review-actions class="flex items-center gap-2">
@@ -1270,6 +1325,22 @@ export default function Page() {
         <Button variant="secondary" size="small" onClick={exportDelivery}>
           Export packet
         </Button>
+        <div data-integration-review-actions data-integration-review-target={store.hook} class="flex items-center gap-2">
+          <Select
+            data-action="integration-hook-target"
+            options={["pr", "ci", "issue"] as const}
+            current={store.hook}
+            value={(option) => option}
+            label={(option) => integrationTargets[option].label}
+            onSelect={(option) => option && setStore("hook", option)}
+            variant="secondary"
+            size="small"
+            triggerStyle={{ "min-width": "84px" }}
+          />
+          <Button variant="ghost" size="small" onClick={() => reviewHookAction().run()}>
+            {reviewHookAction().label}
+          </Button>
+        </div>
       </div>
     ) : undefined
 
@@ -1882,6 +1953,7 @@ export default function Page() {
                   board={dashboard()}
                   review={review()}
                   delivery={delivery()}
+                  integration={integration()}
                   metrics={metric()}
                   metricHistory={metricHistory()}
                   template={selectedTemplate()}
@@ -1892,6 +1964,8 @@ export default function Page() {
                   onRetry={retryNode}
                   onCopyDelivery={copyDelivery}
                   onExportDelivery={exportDelivery}
+                  onCopyIntegration={copyIntegration}
+                  onStageIntegration={stageIntegration}
                   onStageRecovery={stageRecovery}
                   onStagePlaybook={stagePlaybook}
                 />
