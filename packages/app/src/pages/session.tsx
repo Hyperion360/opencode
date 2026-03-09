@@ -36,6 +36,7 @@ import { usePrompt } from "@/context/prompt"
 import { useComments } from "@/context/comments"
 import { ConstrainDragYAxis, getDraggableId } from "@/utils/solid-dnd"
 import { usePermission } from "@/context/permission"
+import { useNotification } from "@/context/notification"
 import { showToast } from "@opencode-ai/ui/toast"
 import { SessionHeader, SessionContextTab, SortableTab, FileVisual } from "@/components/session"
 import { SessionDashboard } from "@/components/session/session-dashboard"
@@ -125,6 +126,7 @@ export default function Page() {
   const codeComponent = useCodeComponent()
   const command = useCommand()
   const language = useLanguage()
+  const notification = useNotification()
   const params = useParams()
   const navigate = useNavigate()
   const sdk = useSDK()
@@ -886,6 +888,21 @@ export default function Page() {
       recovery: recovery(),
     }),
   )
+
+  createEffect(() => {
+    const id = params.id
+    if (!id) return
+
+    const item = recovery()
+    notification.routeSessionState({
+      directory: sdk.directory,
+      sessionID: id,
+      payloads: integration().notification,
+      reviewReady: integration().pr.state === "ready" && review().state === "ready" && board().verification.state === "ready" && !item?.approval,
+      runFailed: !item?.approval && (item?.state === "failed" || board().verification.failed > 0 || board().execution.failed > 0),
+      approvalNeeded: !!item?.approval,
+    })
+  })
 
   const stagePrompt = (value: string) => {
     prompt.set([{ type: "text", content: value, start: 0, end: value.length }], value.length)

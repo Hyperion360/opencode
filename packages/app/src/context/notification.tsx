@@ -14,11 +14,14 @@ import { EventSessionError } from "@opencode-ai/sdk/v2"
 import { Persist, persisted } from "@/utils/persist"
 import { playSound, soundSrc } from "@/utils/sound"
 import { buildNotificationIndex } from "./notification-index"
+import { hasNotificationKey, notificationKey, resolveSessionNotification, type SessionNotificationInput } from "./notification-routes"
 
 type NotificationBase = {
   directory?: string
   session?: string
   metadata?: any
+  key?: string
+  hasError?: boolean
   time: number
   viewed: boolean
 }
@@ -30,9 +33,17 @@ type TurnCompleteNotification = NotificationBase & {
 type ErrorNotification = NotificationBase & {
   type: "error"
   error: EventSessionError["properties"]["error"]
+  hasError: true
 }
 
-export type Notification = TurnCompleteNotification | ErrorNotification
+type SessionStateNotification = NotificationBase & {
+  type: "review-ready" | "run-failed" | "approval-needed"
+  session: string
+  title: string
+  summary: string
+}
+
+export type Notification = TurnCompleteNotification | ErrorNotification | SessionStateNotification
 
 const MAX_NOTIFICATIONS = 500
 const NOTIFICATION_TTL_MS = 1000 * 60 * 60 * 24 * 30
@@ -79,7 +90,10 @@ export const { use: useNotification, provider: NotificationProvider } = createSi
     })
 
     const append = (notification: Notification) => {
-      setStore("list", (list) => pruneNotifications([...list, notification]))
+      setStore("list", (list) => {
+        if (notification.key && hasNotificationKey(list, notification.key)) return list
+        return pruneNotifications([...list, notification])
+      })
     }
 
     const index = createMemo(() => buildNotificationIndex(store.list))
@@ -95,21 +109,67 @@ export const { use: useNotification, provider: NotificationProvider } = createSi
         .catch(() => undefined)
     }
 
+    const viewed = (directory: string, sessionID?: string) => {
+      const activeDirectory = currentDirectory()
+      const activeSession = currentSession()
+      if (!activeDirectory) return false
+      if (!activeSession) return false
+      if (!sessionID) return false
+      if (directory !== activeDirectory) return false
+      return sessionID === activeSession
+    }
+
+    const sounds = {
+      agent: () => settings.sounds.agent(),
+      permissions: () => settings.sounds.permissions(),
+      errors: () => settings.sounds.errors(),
+    }
+
+    const notifications = {
+      agent: () => settings.notifications.agent(),
+      permissions: () => settings.notifications.permissions(),
+      errors: () => settings.notifications.errors(),
+    }
+
+    const routeSessionState = (input: { directory: string; sessionID: string } & SessionNotificationInput) => {
+      const routed = resolveSessionNotification(input)
+      if (!routed) return
+
+      const key = notificationKey({
+        type: routed.type,
+        directory: input.directory,
+        session: input.sessionID,
+        title: routed.title,
+        summary: routed.summary,
+      })
+
+      if (hasNotificationKey(store.list, key)) return
+
+      playSound(soundSrc(sounds[routed.channel]()))
+
+      append({
+        directory: input.directory,
+        session: input.sessionID,
+        key,
+        time: Date.now(),
+        title: routed.title,
+        summary: routed.summary,
+        viewed: viewed(input.directory, input.sessionID),
+        type: routed.type,
+        hasError: routed.type === "run-failed",
+      })
+
+      if (!notifications[routed.channel]()) return
+      const href = `/${base64Encode(input.directory)}/session/${input.sessionID}`
+      void platform.notify(routed.title, routed.summary, href)
+    }
+
     const unsub = globalSDK.event.listen((e) => {
       const event = e.details
       if (event.type !== "session.idle" && event.type !== "session.error") return
 
       const directory = e.name
       const time = Date.now()
-      const viewed = (sessionID?: string) => {
-        const activeDirectory = currentDirectory()
-        const activeSession = currentSession()
-        if (!activeDirectory) return false
-        if (!activeSession) return false
-        if (!sessionID) return false
-        if (directory !== activeDirectory) return false
-        return sessionID === activeSession
-      }
       switch (event.type) {
         case "session.idle": {
           const sessionID = event.properties.sessionID
@@ -123,7 +183,7 @@ export const { use: useNotification, provider: NotificationProvider } = createSi
             append({
               directory,
               time,
-              viewed: viewed(sessionID),
+              viewed: viewed(directory, sessionID),
               type: "turn-complete",
               session: sessionID,
             })
@@ -151,10 +211,11 @@ export const { use: useNotification, provider: NotificationProvider } = createSi
             append({
               directory,
               time,
-              viewed: viewed(sessionID),
+              viewed: viewed(directory, sessionID),
               type: "error",
               session: sessionID ?? "global",
               error,
+              hasError: true,
             })
             const description =
               session?.title ??
@@ -175,6 +236,7 @@ export const { use: useNotification, provider: NotificationProvider } = createSi
 
     return {
       ready,
+      routeSessionState,
       session: {
         all(session: string) {
           return index().session.all.get(session) ?? empty

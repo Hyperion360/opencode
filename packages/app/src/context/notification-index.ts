@@ -3,6 +3,7 @@ type NotificationIndexItem = {
   session?: string
   viewed: boolean
   type: string
+  hasError?: boolean
 }
 
 export function buildNotificationIndex<T extends NotificationIndexItem>(list: T[]) {
@@ -16,6 +17,7 @@ export function buildNotificationIndex<T extends NotificationIndexItem>(list: T[
   const projectUnseenHasError = new Map<string, boolean>()
 
   for (const notification of list) {
+    const hasError = notification.hasError ?? notification.type === "error"
     const session = notification.session
     if (session) {
       const all = sessionAll.get(session)
@@ -28,7 +30,7 @@ export function buildNotificationIndex<T extends NotificationIndexItem>(list: T[
         else sessionUnseen.set(session, [notification])
 
         sessionUnseenCount.set(session, (sessionUnseenCount.get(session) ?? 0) + 1)
-        if (notification.type === "error") sessionUnseenHasError.set(session, true)
+        if (hasError) sessionUnseenHasError.set(session, true)
       }
     }
 
@@ -44,7 +46,7 @@ export function buildNotificationIndex<T extends NotificationIndexItem>(list: T[
         else projectUnseen.set(directory, [notification])
 
         projectUnseenCount.set(directory, (projectUnseenCount.get(directory) ?? 0) + 1)
-        if (notification.type === "error") projectUnseenHasError.set(directory, true)
+        if (hasError) projectUnseenHasError.set(directory, true)
       }
     }
   }
