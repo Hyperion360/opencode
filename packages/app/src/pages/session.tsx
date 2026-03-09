@@ -56,7 +56,10 @@ import { terminalTabLabel } from "@/pages/session/terminal-label"
 import { MessageTimeline } from "@/pages/session/message-timeline"
 import {
   buildBoard,
+  buildRecoveryPrompt,
   buildPlaybookPrompt,
+  buildResumePrompt,
+  buildReviewPrompt,
   buildRetryPrompt,
   buildRunRecord,
   createWorkspaceKit,
@@ -66,6 +69,7 @@ import {
   kitSkills,
   kitTemplates,
   resolveRunBoard,
+  resolveRunRecovery,
 } from "@/pages/session/backlog"
 import { useSessionCommands } from "@/pages/session/use-session-commands"
 import { SessionPromptDock } from "@/pages/session/session-prompt-dock"
@@ -801,6 +805,13 @@ export default function Page() {
       status: status(),
     })
   })
+  const recovery = createMemo(() =>
+    resolveRunRecovery({
+      live: liveBoard(),
+      record: run(),
+      status: status(),
+    }),
+  )
 
   const stagePrompt = (value: string) => {
     prompt.set([{ type: "text", content: value, start: 0, end: value.length }], value.length)
@@ -825,6 +836,41 @@ export default function Page() {
         template: selectedTemplate()?.label,
         playbook: selectedPlaybook()?.label,
         skills: selectedSkills().map((item) => item.label),
+      }),
+    )
+  }
+
+  const stageRecovery = () => {
+    const item = recovery()
+    if (!item) return
+
+    const input = {
+      title: run()?.title ?? info()?.title,
+      detail: item.detail,
+      template: selectedTemplate()?.label,
+      playbook: selectedPlaybook()?.label,
+      skills: selectedSkills().map((skill) => skill.label),
+    }
+
+    if (item.action.kind === "recover") {
+      stagePrompt(
+        buildRecoveryPrompt({
+          ...input,
+          node: item.node,
+        }),
+      )
+      return
+    }
+
+    if (item.action.kind === "review") {
+      stagePrompt(buildReviewPrompt(input))
+      return
+    }
+
+    stagePrompt(
+      buildResumePrompt({
+        ...input,
+        focus: item.title,
       }),
     )
   }
@@ -1695,7 +1741,9 @@ export default function Page() {
                   playbook={selectedPlaybook()}
                   skills={selectedSkills()}
                   history={kit.history()}
+                  recovery={recovery()}
                   onRetry={retryNode}
+                  onStageRecovery={stageRecovery}
                   onStagePlaybook={stagePlaybook}
                 />
                 <Show

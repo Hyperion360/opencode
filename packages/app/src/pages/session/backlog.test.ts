@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { applyTemplate, buildBoard, buildPlaybookPrompt, buildRetryPrompt, kitTemplates } from "./backlog"
+import { applyTemplate, buildBoard, buildPlaybookPrompt, buildRecoveryPrompt, buildResumePrompt, buildReviewPrompt, buildRetryPrompt, kitTemplates } from "./backlog"
 
 describe("session backlog helpers", () => {
   test("applies a template as structured intake", () => {
@@ -99,13 +99,27 @@ describe("session backlog helpers", () => {
     expect(board.activity[0]?.tone).toBe("warning")
   })
 
-  test("builds retry and playbook prompts with selected context", () => {
+  test("builds recovery prompts with selected context", () => {
     const retry = buildRetryPrompt({ node: "Re-run tests", template: "Feature launch", playbook: "Parallel delivery", skills: ["QA gate"] })
     const playbook = buildPlaybookPrompt({ template: "Feature launch", playbook: "Parallel delivery", skills: ["Spec guard", "QA gate"] })
+    const resume = buildResumePrompt({ title: "Recovered run", focus: "Resume recovered run", detail: "Persisted board restored", template: "Feature launch", playbook: "Parallel delivery", skills: ["Spec guard"] })
+    const recovery = buildRecoveryPrompt({ title: "Recovered run", node: "Recover orchestration state", detail: "quota exceeded", template: "Feature launch", playbook: "Parallel delivery", skills: ["QA gate"] })
+    const review = buildReviewPrompt({ title: "Recovered run", detail: "Validation evidence is attached", template: "Feature launch", playbook: "Parallel delivery", skills: ["Ops audit"] })
 
     expect(retry).toContain("Task: Re-run tests")
     expect(retry).toContain("Parallel delivery")
     expect(playbook).toContain("Skill packs:")
     expect(playbook).toContain("- QA gate")
+    expect(resume).toContain("Recovery focus: Resume recovered run")
+    expect(recovery).toContain("Blocked node: Recover orchestration state")
+    expect(review).toContain("Operator note: Validation evidence is attached")
+  })
+
+  test("keeps recovery affordance markers in the dashboard rendering", async () => {
+    const view = await Bun.file(new URL("../../components/session/session-dashboard.tsx", import.meta.url)).text()
+
+    expect(view).toContain("Recovered run state")
+    expect(view).toContain("data-recovery-state")
+    expect(view).toContain("onStageRecovery")
   })
 })

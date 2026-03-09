@@ -143,6 +143,18 @@ export type RunRecord = {
   wave: SessionStatus
 }
 
+export type RunRecovery = {
+  state: "resumable" | "interrupted" | "failed" | "awaiting"
+  tone: "running" | "warning" | "blocked" | "ready"
+  title: string
+  detail: string
+  action: {
+    kind: "resume" | "recover" | "review"
+    label: string
+  }
+  node?: string
+}
+
 type RunStore = {
   runs: Record<string, RunRecord>
 }
@@ -310,6 +322,59 @@ export function buildRetryPrompt(input: { node: string; template?: string; playb
     "Do not restart completed work. Re-check affected files, rerun the narrowest relevant validation, and report residual risk.",
   ].join("\n")
 }
+
+export function buildResumePrompt(input: { title?: string; focus?: string; detail?: string; template?: string; playbook?: string; skills: string[] }) {
+  return [
+    "Resume the recovered Hyperion360 run in the current session.",
+    input.title ? `Run: ${input.title}` : "Run: current session",
+    input.focus ? `Recovery focus: ${input.focus}` : "Recovery focus: continue the saved execution graph",
+    input.detail ? `Recovered context: ${input.detail}` : "Recovered context: persisted board state is available",
+    input.template ? `Template context: ${input.template}` : "Template context: none selected",
+    input.playbook ? `Playbook context: ${input.playbook}` : "Playbook context: none selected",
+    "Attached skill packs:",
+    ...(input.skills.length > 0 ? input.skills.map((item) => `- ${item}`) : ["- none attached"]),
+    "",
+    "Continue from the persisted execution graph. Do not restart completed work. First summarize what was recovered, then continue the highest-priority unfinished step and rerun the narrowest relevant validation before handoff.",
+  ].join("\n")
+}
+
+export function buildRecoveryPrompt(input: {
+  title?: string
+  node?: string
+  detail?: string
+  template?: string
+  playbook?: string
+  skills: string[]
+}) {
+  return [
+    "Recover the persisted Hyperion360 run in the current session.",
+    input.title ? `Run: ${input.title}` : "Run: current session",
+    input.node ? `Blocked node: ${input.node}` : "Blocked node: inspect the saved execution graph",
+    input.detail ? `Failure context: ${input.detail}` : "Failure context: the recovered run needs another pass",
+    input.template ? `Template context: ${input.template}` : "Template context: none selected",
+    input.playbook ? `Playbook context: ${input.playbook}` : "Playbook context: none selected",
+    "Attached skill packs:",
+    ...(input.skills.length > 0 ? input.skills.map((item) => `- ${item}`) : ["- none attached"]),
+    "",
+    "Diagnose the saved failure, preserve completed work, retry only the unfinished or failed node, and summarize validation plus residual risk before handoff.",
+  ].join("\n")
+}
+
+export function buildReviewPrompt(input: { title?: string; detail?: string; template?: string; playbook?: string; skills: string[] }) {
+  return [
+    "Review the recovered Hyperion360 run before delivery.",
+    input.title ? `Run: ${input.title}` : "Run: current session",
+    input.detail ? `Operator note: ${input.detail}` : "Operator note: the recovered run still needs review",
+    input.template ? `Template context: ${input.template}` : "Template context: none selected",
+    input.playbook ? `Playbook context: ${input.playbook}` : "Playbook context: none selected",
+    "Attached skill packs:",
+    ...(input.skills.length > 0 ? input.skills.map((item) => `- ${item}`) : ["- none attached"]),
+    "",
+    "Inspect the recovered diff and validation state, run the narrowest missing check or review step, and summarize whether the run is ready to hand off without restarting completed work.",
+  ].join("\n")
+}
+
+const retryNode = (board: Board) => board.execution.nodes.find((item) => item.retry)?.label ?? board.execution.nodes[0]?.label
 
 export function buildBoard(input: {
   session?: Session
@@ -537,6 +602,78 @@ export function resolveRunBoard(input: { live: Board; record?: RunRecord; status
   if (!input.record) return input.live
   if (hasRunState({ board: input.live, status: input.status })) return input.live
   return input.record.board
+}
+
+export function resolveRunRecovery(input: { live: Board; record?: RunRecord; status: SessionStatus }) {
+  if (!input.record) return
+  if (hasRunState({ board: input.live, status: input.status })) return
+
+  const board = input.record.board
+  const node = retryNode(board)
+
+  if (input.record.wave.type === "retry" || board.execution.state === "retry" || board.execution.failed > 0 || board.verification.failed > 0) {
+    return {
+      state: "failed",
+      tone: "blocked",
+      title: "Recovery required",
+      detail:
+        input.record.wave.type === "retry"
+          ? input.record.wave.message
+          : node
+            ? `${node} needs another recovery pass before the run can continue.`
+            : "The recovered run needs a focused recovery pass before it can continue.",
+      action: {
+        kind: "recover",
+        label: "Stage recovery prompt",
+      },
+      node,
+    } satisfies RunRecovery
+  }
+
+  if (input.record.wave.type === "busy" || board.execution.state === "running" || board.execution.active > 0) {
+    return {
+      state: "resumable",
+      tone: "running",
+      title: "Resume recovered run",
+      detail: "Live session state is empty, but the persisted board shows work was still in flight. Continue from the saved orchestration context without restarting completed work.",
+      action: {
+        kind: "resume",
+        label: "Stage resume prompt",
+      },
+      node,
+    } satisfies RunRecovery
+  }
+
+  if (board.verification.state === "ready" || board.verification.state === "blocked" || board.delivery.files > 0) {
+    return {
+      state: "awaiting",
+      tone: board.verification.state === "ready" ? "ready" : "warning",
+      title: board.verification.state === "ready" ? "Awaiting delivery review" : "Awaiting operator action",
+      detail:
+        board.verification.state === "ready"
+          ? "Validation evidence is attached to the recovered run. Review the persisted snapshot and hand off without restarting completed work."
+          : "The recovered run still needs validation or delivery follow-up before it is safe to hand off.",
+      action: {
+        kind: "review",
+        label: board.verification.state === "ready" ? "Stage review prompt" : "Stage verification prompt",
+      },
+      node,
+    } satisfies RunRecovery
+  }
+
+  if (!hasRunState({ board, status: input.record.wave })) return
+
+  return {
+    state: "interrupted",
+    tone: "warning",
+    title: "Recovered snapshot ready",
+    detail: "Live session state is empty, but the last persisted board was restored. Review the saved execution state and resume the next unfinished step.",
+    action: {
+      kind: "resume",
+      label: "Stage resume prompt",
+    },
+    node,
+  } satisfies RunRecovery
 }
 
 function pruneRuns(runs: Record<string, RunRecord>) {

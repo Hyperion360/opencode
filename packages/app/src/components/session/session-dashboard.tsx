@@ -4,7 +4,7 @@ import { Button } from "@opencode-ai/ui/button"
 import { Card } from "@opencode-ai/ui/card"
 import { Icon } from "@opencode-ai/ui/icon"
 import { Tag } from "@opencode-ai/ui/tag"
-import type { Board, GraphNode, KitEvent, KitPlaybook, KitSkill, KitTemplate } from "@/pages/session/backlog"
+import type { Board, GraphNode, KitEvent, KitPlaybook, KitSkill, KitTemplate, RunRecovery } from "@/pages/session/backlog"
 
 const tone = (value: string) => {
   if (value === "ready" || value === "success" || value === "completed") return "bg-emerald-500/15 text-emerald-300"
@@ -26,7 +26,9 @@ export function SessionDashboard(props: {
   playbook?: KitPlaybook
   skills: KitSkill[]
   history: KitEvent[]
+  recovery?: RunRecovery
   onRetry: (id: string) => void
+  onStageRecovery: () => void
   onStagePlaybook: () => void
 }) {
   return (
@@ -45,6 +47,32 @@ export function SessionDashboard(props: {
             </Show>
           </div>
         </div>
+
+        <Show when={props.recovery}>
+          {(item) => (
+            <Card class="p-4 flex flex-col gap-3" data-recovery-state={item().state} data-recovery-action={item().action.kind}>
+              <div class="flex items-start justify-between gap-3 flex-wrap">
+                <div class="flex items-start gap-2">
+                  <Icon name="task" size="small" />
+                  <div>
+                    <div class="text-14-medium text-text-strong">Recovered run state</div>
+                    <div class="text-12-regular text-text-weak">{item().detail}</div>
+                  </div>
+                </div>
+                <div class="flex items-center gap-2 flex-wrap">
+                  <Tag class={`px-2 py-1 ${tone(item().tone)}`}>{item().state}</Tag>
+                  <Tag class="px-2 py-1 bg-background-strong text-text-strong">persisted snapshot</Tag>
+                </div>
+              </div>
+              <div class="flex items-center justify-between gap-3 flex-wrap">
+                <div class="text-12-medium text-text-strong">{item().title}</div>
+                <Button variant="secondary" size="small" onClick={props.onStageRecovery}>
+                  {item().action.label}
+                </Button>
+              </div>
+            </Card>
+          )}
+        </Show>
 
         <div class="grid gap-4 xl:grid-cols-2">
           <Card class="p-4 flex flex-col gap-3">
