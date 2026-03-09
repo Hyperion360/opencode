@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, mock, test } from "bun:test"
 import { createRoot } from "solid-js"
+import { createStore } from "solid-js/store"
 import type { Board } from "./backlog"
 
 type BacklogModule = typeof import("./backlog")
@@ -76,9 +77,7 @@ const board = (input: { state: "idle" | "running" | "retry"; total: number; titl
   }) satisfies Board
 
 beforeAll(async () => {
-  mock.module("@/utils/persist", async () => {
-    const { createStore } = await import("solid-js/store")
-
+  mock.module("@/utils/persist", () => {
     return {
       Persist: {
         workspace: (_dir: string, key: string) => ({ key }),
