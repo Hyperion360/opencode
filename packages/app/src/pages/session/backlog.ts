@@ -238,6 +238,17 @@ export type MetricsReadiness = {
   signals: ReviewSignal[]
 }
 
+export type MetricTrend = {
+  id: "activation" | "quality"
+  label: string
+  value: number
+  delta?: number
+  direction: "up" | "down" | "flat" | "baseline"
+  tone: ReviewSignal["tone"]
+  detail: string
+  explainer: string
+}
+
 export type RunRecovery = {
   state: "resumable" | "interrupted" | "failed" | "awaiting"
   tone: "running" | "warning" | "blocked" | "ready"
@@ -264,6 +275,7 @@ type RunStore = {
 
 type MetricsStore = {
   latest?: MetricsSnapshot
+  previous?: MetricsSnapshot
 }
 
 export const kitTemplates: KitTemplate[] = [
@@ -992,6 +1004,58 @@ export function buildMetricsReadiness(input: { board: Board; review: SpecReview;
   } satisfies MetricsReadiness
 }
 
+export function buildMetricTrends(input: { board: Board; previous?: MetricsSnapshot; source: "live" | "workspace" }) {
+  const baseline = input.previous?.title ?? input.previous?.sessionID ?? "the last saved workspace snapshot"
+  const scope = input.source === "workspace" ? "Recovered workspace snapshot" : "Current session state"
+  const activation = input.board.operations.activation
+  const quality = input.board.operations.quality
+  const activationDelta = input.previous ? activation - input.previous.activation : undefined
+  const qualityDelta = input.previous ? quality - input.previous.quality : undefined
+  const activationDirection = activationDelta === undefined ? "baseline" : activationDelta > 0 ? "up" : activationDelta < 0 ? "down" : "flat"
+  const qualityDirection = qualityDelta === undefined ? "baseline" : qualityDelta > 0 ? "up" : qualityDelta < 0 ? "down" : "flat"
+
+  return [
+    {
+      id: "activation",
+      label: "Activation trend",
+      value: activation,
+      delta: activationDelta,
+      direction: activationDirection,
+      tone: activationDirection === "up" ? "success" : activationDirection === "down" ? "danger" : "normal",
+      detail:
+        activationDirection === "up"
+          ? `${scope} is up ${activationDelta} points versus ${baseline}, so materially more scoped work is landing.`
+          : activationDirection === "down"
+            ? `${scope} is down ${Math.abs(activationDelta ?? 0)} points versus ${baseline}, so operators should confirm whether scope changed or work slipped.`
+            : activationDirection === "flat"
+              ? `${scope} is holding steady versus ${baseline}, so completion is not moving materially yet.`
+              : input.source === "workspace"
+                ? `${scope} has no earlier saved baseline yet, so this snapshot is the first activation anchor for review.`
+                : `${scope} has no earlier saved baseline yet, so this run is setting the first activation anchor for review.`,
+      explainer: "Activation tracks how much of the scoped work is materially complete.",
+    },
+    {
+      id: "quality",
+      label: "Quality trend",
+      value: quality,
+      delta: qualityDelta,
+      direction: qualityDirection,
+      tone: qualityDirection === "up" ? "success" : qualityDirection === "down" ? "danger" : "normal",
+      detail:
+        qualityDirection === "up"
+          ? `${scope} is up ${qualityDelta} points versus ${baseline}, so validation and reviewer confidence are improving.`
+          : qualityDirection === "down"
+            ? `${scope} is down ${Math.abs(qualityDelta ?? 0)} points versus ${baseline}, so operator review should check failing validation or unresolved reviewer risk.`
+            : qualityDirection === "flat"
+              ? `${scope} is holding steady versus ${baseline}, so confidence has not materially changed.`
+              : input.source === "workspace"
+                ? `${scope} has no earlier saved baseline yet, so this snapshot is the first quality anchor for review.`
+                : `${scope} has no earlier saved baseline yet, so this run is setting the first quality anchor for review.`,
+      explainer: "Quality blends validation pass rate with reviewer confidence.",
+    },
+  ] satisfies MetricTrend[]
+}
+
 export function buildBoard(input: {
   session?: Session
   status: SessionStatus
@@ -1391,10 +1455,12 @@ function createMetricSession(dir: string) {
     ready,
     state: () => store,
     latest: () => store.latest,
+    previous: () => store.previous,
     remember: (snapshot: MetricsSnapshot) =>
       setStore(
         produce((draft) => {
           if (sameMetricsSnapshot(draft.latest, snapshot)) return
+          draft.previous = draft.latest
           draft.latest = snapshot
         }),
       ),
@@ -1577,6 +1643,7 @@ export function createWorkspaceMetrics(dir: Accessor<string>) {
     ready: () => state().ready(),
     state: () => state().state(),
     latest: () => state().latest(),
+    previous: () => state().previous(),
     remember: (snapshot: MetricsSnapshot) => state().remember(snapshot),
   }
 }

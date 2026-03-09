@@ -823,6 +823,13 @@ export default function Page() {
       status: status(),
     })
   })
+  const metricHistory = createMemo(() => {
+    if (!metrics.ready()) return
+    return {
+      latest: metrics.latest(),
+      previous: metrics.previous(),
+    }
+  })
   const dashboard = createMemo(() => {
     if (!metrics.ready()) return board()
     return resolveMetricBoard({
@@ -1876,6 +1883,7 @@ export default function Page() {
                   review={review()}
                   delivery={delivery()}
                   metrics={metric()}
+                  metricHistory={metricHistory()}
                   template={selectedTemplate()}
                   playbook={selectedPlaybook()}
                   skills={selectedSkills()}

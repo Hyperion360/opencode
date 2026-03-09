@@ -5,7 +5,7 @@ import { Button } from "@opencode-ai/ui/button"
 import { Card } from "@opencode-ai/ui/card"
 import { Icon } from "@opencode-ai/ui/icon"
 import { Tag } from "@opencode-ai/ui/tag"
-import { buildMetricsReadiness, type Board, type DeliveryPacket, type GraphNode, type KitEvent, type KitPlaybook, type KitSkill, type KitTemplate, type MetricsSnapshot, type RunRecovery, type SpecReview } from "@/pages/session/backlog"
+import { buildMetricTrends, buildMetricsReadiness, type Board, type DeliveryPacket, type GraphNode, type KitEvent, type KitPlaybook, type KitSkill, type KitTemplate, type MetricsSnapshot, type RunRecovery, type SpecReview } from "@/pages/session/backlog"
 
 const tone = (value: string) => {
   if (value === "ready" || value === "success" || value === "completed") return "bg-emerald-500/15 text-emerald-300"
@@ -21,11 +21,22 @@ const action = (item: KitEvent) => {
   return "selected"
 }
 
+const change = (value?: number, direction?: "up" | "down" | "flat" | "baseline") => {
+  if (direction === "baseline") return "baseline"
+  if (direction === "flat") return "steady"
+  if (!value) return "steady"
+  return `${value > 0 ? "+" : ""}${value} pts`
+}
+
 export function SessionDashboard(props: {
   board: Board
   review: SpecReview
   delivery: DeliveryPacket
   metrics?: MetricsSnapshot
+  metricHistory?: {
+    latest?: MetricsSnapshot
+    previous?: MetricsSnapshot
+  }
   template?: KitTemplate
   playbook?: KitPlaybook
   skills: KitSkill[]
@@ -44,6 +55,8 @@ export function SessionDashboard(props: {
 
   const current = createMemo(() => props.board.verification.checks.find((item) => item.id === drawer.id) ?? props.board.verification.checks[0])
   const readiness = createMemo(() => buildMetricsReadiness({ board: props.board, review: props.review, delivery: props.delivery, snapshot: props.metrics }))
+  const currentMetric = createMemo(() => props.metrics ?? props.metricHistory?.latest)
+  const trends = createMemo(() => buildMetricTrends({ board: props.board, previous: props.metricHistory?.previous, source: props.metrics ? "workspace" : "live" }))
 
   const open = (id?: string) => {
     if (!id) return
@@ -364,15 +377,39 @@ export function SessionDashboard(props: {
               <Metric label="activation" value={`${props.board.operations.activation}%`} />
               <Metric label="quality" value={`${props.board.operations.quality}%`} />
             </div>
-            <Show when={props.metrics}>
+            <Show when={currentMetric()}>
               {(item) => (
-                <div class="flex items-center gap-2 flex-wrap text-11-regular text-text-weak">
-                  <Tag class="px-2 py-1 bg-background-strong text-text-strong">workspace snapshot</Tag>
-                  <span>Last workspace metrics snapshot{item().title ? ` · ${item().title}` : item().sessionID ? ` · ${item().sessionID}` : ""}</span>
+                <div data-metrics-context class="flex items-center gap-2 flex-wrap text-11-regular text-text-weak">
+                  <Tag class="px-2 py-1 bg-background-strong text-text-strong">{props.metrics ? "workspace snapshot" : "saved metrics context"}</Tag>
+                  <span>{props.metrics ? "Last workspace metrics snapshot" : "Latest saved metrics context"}{item().title ? ` · ${item().title}` : item().sessionID ? ` · ${item().sessionID}` : ""}</span>
                   <span>{DateTime.fromMillis(item().updatedAt).toRelative() ?? "now"}</span>
+                  <span>{item().execution} execution</span>
                 </div>
               )}
             </Show>
+            <div class="grid gap-2 lg:grid-cols-2">
+              <For each={trends()}>
+                {(item) => (
+                  <div data-metric-trend={item.id} class="rounded-lg border border-border-weak px-3 py-3 bg-background-base/60 flex flex-col gap-2">
+                    <div class="flex items-start justify-between gap-2">
+                      <div>
+                        <div class="text-12-medium text-text-strong">{item.label}</div>
+                        <div class="text-11-regular text-text-weak">{item.explainer}</div>
+                      </div>
+                      <div class="flex items-center gap-2 shrink-0">
+                        <div class="text-14-medium text-text-strong">{item.value}%</div>
+                        <Tag class={`px-2 py-1 ${tone(item.tone)}`}>{change(item.delta, item.direction)}</Tag>
+                      </div>
+                    </div>
+                    <div class="text-11-regular text-text-weak">{item.detail}</div>
+                  </div>
+                )}
+              </For>
+            </div>
+            <div data-operator-review-copy class="rounded-lg border border-border-weak px-3 py-3 bg-background-strong/40 text-11-regular text-text-weak">
+              <div class="text-12-medium text-text-strong">Operator review guidance</div>
+              <div class="mt-2">Use activation to judge how much scoped work is materially complete. Use quality to judge whether validation and reviewer confidence are strong enough for handoff. Rising activation with stable quality is healthy progress; falling quality is a cue to pause and review before approval.</div>
+            </div>
             <div class="grid gap-2 lg:grid-cols-3" data-metrics-readiness-source={readiness().source}>
               <For each={readiness().signals}>
                 {(item) => (

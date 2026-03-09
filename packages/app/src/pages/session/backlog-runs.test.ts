@@ -205,11 +205,19 @@ describe("workspace run persistence", () => {
       },
       retries: 1,
     } as const
+    const next = {
+      ...snapshot,
+      updatedAt: 50,
+      activation: 81,
+      quality: 88,
+      retries: 2,
+    } as const
 
     createRoot((dispose) => {
       const metrics = backlog.createWorkspaceMetrics(() => "/private/var/tmp/hyperion/")
       expect(metrics.ready()).toBe(true)
       metrics.remember(snapshot)
+      metrics.remember(next)
       dispose()
     })
 
@@ -217,7 +225,8 @@ describe("workspace run persistence", () => {
       const metrics = backlog.createWorkspaceMetrics(() => "/var/tmp/hyperion")
       const restored = metrics.latest()
 
-      expect(restored).toEqual(snapshot)
+      expect(restored).toEqual(next)
+      expect(metrics.previous()).toEqual(snapshot)
       dispose()
     })
   })

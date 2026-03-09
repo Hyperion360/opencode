@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { applyTemplate, buildApprovalPrompt, buildBoard, buildDeliveryPacket, buildMetricsReadiness, buildMetricsSnapshot, buildPlaybookPrompt, buildRecoveryPrompt, buildResumePrompt, buildReviewPrompt, buildRetryPrompt, buildSpecReview, kitTemplates } from "./backlog"
+import { applyTemplate, buildApprovalPrompt, buildBoard, buildDeliveryPacket, buildMetricTrends, buildMetricsReadiness, buildMetricsSnapshot, buildPlaybookPrompt, buildRecoveryPrompt, buildResumePrompt, buildReviewPrompt, buildRetryPrompt, buildSpecReview, kitTemplates } from "./backlog"
 
 describe("session backlog helpers", () => {
   test("applies a template as structured intake", () => {
@@ -440,6 +440,59 @@ describe("session backlog helpers", () => {
     )
   })
 
+  test("builds lightweight metric trend copy from the previous workspace snapshot", () => {
+    const board = buildBoard({
+      session: {
+        id: "s10",
+        slug: "s10",
+        projectID: "p1",
+        directory: "/tmp/app",
+        title: "Pilot run",
+        version: "1",
+        time: { created: 0, updated: 0 },
+      },
+      status: { type: "busy" },
+      todos: [
+        { id: "t1", content: "Implement", status: "completed", priority: "high" },
+        { id: "t2", content: "Verify", status: "in_progress", priority: "medium" },
+      ],
+      diffs: [{ file: "src/app.ts", before: "a", after: "b", additions: 3, deletions: 1, status: "modified" }],
+      messages: [],
+      parts: [],
+      agents: [],
+      commands: [],
+      now: 120_000,
+    })
+    const trends = buildMetricTrends({
+      board,
+      source: "live",
+      previous: {
+        sessionID: "s9",
+        title: "Earlier run",
+        updatedAt: 321,
+        activation: 24,
+        quality: 95,
+        execution: "running",
+        verification: "ready",
+        review: "ready",
+        delivery: {
+          ready: 2,
+          total: 4,
+          files: 1,
+          rollback: true,
+        },
+        retries: 0,
+      },
+    })
+
+    expect(trends).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "activation", direction: "up", delta: 26, detail: expect.stringContaining("up 26 points") }),
+        expect.objectContaining({ id: "quality", direction: "down", delta: -95, detail: expect.stringContaining("down 95 points") }),
+      ]),
+    )
+  })
+
   test("surfaces retry api errors in activity", () => {
     const board = buildBoard({
       session: {
@@ -536,12 +589,20 @@ describe("session backlog helpers", () => {
 
   test("keeps workspace metrics snapshot markers in the dashboard rendering", async () => {
     const view = await Bun.file(new URL("../../components/session/session-dashboard.tsx", import.meta.url)).text()
+    const helper = await Bun.file(new URL("./backlog.ts", import.meta.url)).text()
 
     expect(view).toContain("data-metrics-source")
+    expect(view).toContain("data-metrics-context")
+    expect(view).toContain("data-metric-trend")
     expect(view).toContain("data-metrics-readiness-source")
     expect(view).toContain("data-metrics-readiness")
+    expect(view).toContain("data-operator-review-copy")
     expect(view).toContain("workspace snapshot")
     expect(view).toContain("Last workspace metrics snapshot")
+    expect(view).toContain("Latest saved metrics context")
+    expect(view).toContain("Operator review guidance")
     expect(view).toContain("buildMetricsReadiness")
+    expect(view).toContain("buildMetricTrends")
+    expect(helper).toContain("Activation tracks how much of the scoped work is materially complete.")
   })
 })
