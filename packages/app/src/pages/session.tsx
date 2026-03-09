@@ -57,6 +57,7 @@ import { MessageTimeline } from "@/pages/session/message-timeline"
 import {
   buildBoard,
   buildDeliveryPacket,
+  buildMetricsSnapshot,
   buildSpecReview,
   buildApprovalPrompt,
   buildRecoveryPrompt,
@@ -66,11 +67,14 @@ import {
   buildRetryPrompt,
   buildRunRecord,
   createWorkspaceKit,
+  createWorkspaceMetrics,
   createWorkspaceRuns,
   hasRunState,
   kitPlaybooks,
   kitSkills,
   kitTemplates,
+  resolveMetricBoard,
+  resolveMetricsSnapshot,
   resolveRunBoard,
   resolveRunRecovery,
 } from "@/pages/session/backlog"
@@ -126,6 +130,7 @@ export default function Page() {
   const permission = usePermission()
   const spec = createLivingSpec(() => sdk.directory)
   const kit = createWorkspaceKit(() => sdk.directory)
+  const metrics = createWorkspaceMetrics(() => sdk.directory)
   const runs = createWorkspaceRuns(() => sdk.directory)
 
   const permRequest = createMemo(() => {
@@ -810,6 +815,22 @@ export default function Page() {
       status: status(),
     })
   })
+  const metric = createMemo(() => {
+    if (!metrics.ready()) return
+    return resolveMetricsSnapshot({
+      board: board(),
+      snapshot: metrics.latest(),
+      status: status(),
+    })
+  })
+  const dashboard = createMemo(() => {
+    if (!metrics.ready()) return board()
+    return resolveMetricBoard({
+      board: board(),
+      snapshot: metric(),
+      status: status(),
+    })
+  })
   const recovery = createMemo(() =>
     resolveRunRecovery({
       live: liveBoard(),
@@ -970,6 +991,26 @@ export default function Page() {
 
     if (!hasRunState({ board: record.board, status: record.wave })) return
     runs.remember(record)
+  })
+
+  createEffect(() => {
+    if (!metrics.ready()) return
+    const id = params.id
+    if (!id) return
+
+    const current = board()
+    const wave = status()
+    if (!hasRunState({ board: current, status: wave })) return
+
+    metrics.remember(
+      buildMetricsSnapshot({
+        sessionID: id,
+        title: info()?.title,
+        board: current,
+        review: review(),
+        delivery: delivery(),
+      }),
+    )
   })
 
   createEffect(
@@ -1831,9 +1872,10 @@ export default function Page() {
             <Switch>
               <Match when={params.id}>
                 <SessionDashboard
-                  board={board()}
+                  board={dashboard()}
                   review={review()}
                   delivery={delivery()}
+                  metrics={metric()}
                   template={selectedTemplate()}
                   playbook={selectedPlaybook()}
                   skills={selectedSkills()}

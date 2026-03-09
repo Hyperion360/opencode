@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { applyTemplate, buildApprovalPrompt, buildBoard, buildDeliveryPacket, buildPlaybookPrompt, buildRecoveryPrompt, buildResumePrompt, buildReviewPrompt, buildRetryPrompt, buildSpecReview, kitTemplates } from "./backlog"
+import { applyTemplate, buildApprovalPrompt, buildBoard, buildDeliveryPacket, buildMetricsSnapshot, buildPlaybookPrompt, buildRecoveryPrompt, buildResumePrompt, buildReviewPrompt, buildRetryPrompt, buildSpecReview, kitTemplates } from "./backlog"
 
 describe("session backlog helpers", () => {
   test("applies a template as structured intake", () => {
@@ -292,6 +292,79 @@ describe("session backlog helpers", () => {
     expect(packet.body).toContain("src/review.ts (+2/-0)")
   })
 
+  test("builds a compact workspace metrics snapshot from board review and delivery state", () => {
+    const board = buildBoard({
+      session: {
+        id: "s8",
+        slug: "s8",
+        projectID: "p1",
+        directory: "/tmp/app",
+        title: "Pilot run",
+        version: "1",
+        time: { created: 0, updated: 0 },
+        revert: { messageID: "m1" },
+      },
+      status: { type: "idle" },
+      todos: [
+        { id: "t1", content: "Implement", status: "completed", priority: "high" },
+        { id: "t2", content: "Verify", status: "completed", priority: "medium" },
+      ],
+      diffs: [{ file: "src/app.ts", before: "a", after: "b", additions: 3, deletions: 1, status: "modified" }],
+      messages: [{ id: "m1", sessionID: "s8", role: "assistant", time: { created: 10 }, parentID: "u1", modelID: "m", providerID: "p", mode: "default", agent: "implementor", path: { cwd: "/tmp/app", root: "/tmp/app" }, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }],
+      parts: [{ id: "p1", sessionID: "s8", messageID: "m1", type: "tool", callID: "c1", tool: "test", state: { status: "completed", input: { command: "bun run test:unit" }, output: "12 pass", title: "Unit tests", metadata: {}, time: { start: 10, end: 11 }, attachments: [] } }],
+      agents: [{ name: "implementor", mode: "primary", permission: [], options: {} }],
+      commands: [],
+      now: 120_000,
+    })
+    const review = buildSpecReview({
+      board,
+      spec: {
+        ready: true,
+        state: "approved",
+        input: {
+          goal: "Ship workspace metrics persistence",
+          constraints: "keep recovery flow intact",
+          acceptance: "restore activation and quality",
+        },
+      },
+    })
+    const delivery = buildDeliveryPacket({
+      title: "Pilot run",
+      board,
+      review,
+      diffs: [{ file: "src/app.ts", before: "a", after: "b", additions: 3, deletions: 1, status: "modified" }],
+      now: 120_000,
+    })
+    const snapshot = buildMetricsSnapshot({
+      sessionID: "s8",
+      title: "Pilot run",
+      board,
+      review,
+      delivery,
+      now: 321,
+    })
+
+    expect(snapshot).toEqual(
+      expect.objectContaining({
+        sessionID: "s8",
+        title: "Pilot run",
+        updatedAt: 321,
+        activation: 100,
+        quality: 100,
+        execution: "idle",
+        verification: "ready",
+        review: "ready",
+        delivery: {
+          ready: 4,
+          total: 4,
+          files: 1,
+          rollback: true,
+        },
+        retries: 0,
+      }),
+    )
+  })
+
   test("surfaces retry api errors in activity", () => {
     const board = buildBoard({
       session: {
@@ -384,5 +457,13 @@ describe("session backlog helpers", () => {
     expect(dashboard).toContain("data-delivery-checklist")
     expect(dashboard).toContain("data-delivery-artifact")
     expect(review).toContain("actions={props.actions}")
+  })
+
+  test("keeps workspace metrics snapshot markers in the dashboard rendering", async () => {
+    const view = await Bun.file(new URL("../../components/session/session-dashboard.tsx", import.meta.url)).text()
+
+    expect(view).toContain("data-metrics-source")
+    expect(view).toContain("workspace snapshot")
+    expect(view).toContain("Last workspace metrics snapshot")
   })
 })

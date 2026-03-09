@@ -18,6 +18,8 @@ const board = (input: {
   parallel?: boolean
   activeAgents?: number
   rollback?: boolean
+  activation?: number
+  quality?: number
 }) =>
   ({
     execution: {
@@ -90,8 +92,8 @@ const board = (input: {
       audit: input.total,
       retries: input.retryCount ?? (input.state === "retry" ? 1 : 0),
       rollback: input.rollback ?? false,
-      activation: 0,
-      quality: 100,
+      activation: input.activation ?? 0,
+      quality: input.quality ?? 100,
       duration: 1,
     },
   }) satisfies Board
@@ -183,6 +185,77 @@ describe("workspace run persistence", () => {
       if (restored?.wave.type === "retry") expect(restored.wave.attempt).toBe(3)
       dispose()
     })
+  })
+
+  test("persists and rehydrates workspace metrics snapshots per canonical workspace", () => {
+    const snapshot = {
+      sessionID: "s-metrics",
+      title: "Pilot run",
+      updatedAt: 25,
+      activation: 67,
+      quality: 82,
+      execution: "running",
+      verification: "ready",
+      review: "warning",
+      delivery: {
+        ready: 3,
+        total: 4,
+        files: 2,
+        rollback: true,
+      },
+      retries: 1,
+    } as const
+
+    createRoot((dispose) => {
+      const metrics = backlog.createWorkspaceMetrics(() => "/private/var/tmp/hyperion/")
+      expect(metrics.ready()).toBe(true)
+      metrics.remember(snapshot)
+      dispose()
+    })
+
+    createRoot((dispose) => {
+      const metrics = backlog.createWorkspaceMetrics(() => "/var/tmp/hyperion")
+      const restored = metrics.latest()
+
+      expect(restored).toEqual(snapshot)
+      dispose()
+    })
+  })
+
+  test("restores persisted activation and quality when live state is empty", () => {
+    const snapshot = {
+      sessionID: "s-metrics",
+      title: "Pilot run",
+      updatedAt: 25,
+      activation: 67,
+      quality: 82,
+      execution: "running",
+      verification: "ready",
+      review: "warning",
+      delivery: {
+        ready: 3,
+        total: 4,
+        files: 2,
+        rollback: true,
+      },
+      retries: 1,
+    } as const
+
+    const restored = backlog.resolveMetricBoard({
+      board: board({ state: "idle", total: 0 }),
+      snapshot,
+      status: { type: "idle" },
+    })
+    const live = backlog.resolveMetricBoard({
+      board: board({ state: "running", total: 1, activation: 14, quality: 33 }),
+      snapshot,
+      status: { type: "busy" },
+    })
+
+    expect(restored.operations.activation).toBe(67)
+    expect(restored.operations.quality).toBe(82)
+    expect(live.operations.activation).toBe(14)
+    expect(live.operations.quality).toBe(33)
   })
 
   test("surfaces a resumable recovery when only persisted running state remains", () => {

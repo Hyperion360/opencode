@@ -6,6 +6,7 @@ import { normalizeWorkspace } from "@/utils/workspace"
 import type { LivingSpecInput, LivingSpecStatus } from "./living-spec"
 
 const MAX_KIT_STORES = 20
+const MAX_METRIC_STORES = 20
 const MAX_RUN_STORES = 20
 const MAX_HISTORY = 24
 const MAX_RUNS = 12
@@ -55,6 +56,9 @@ type KitCacheEntry = { value: KitSession; dispose: VoidFunction }
 
 type RunSession = ReturnType<typeof createRunSession>
 type RunCacheEntry = { value: RunSession; dispose: VoidFunction }
+
+type MetricSession = ReturnType<typeof createMetricSession>
+type MetricCacheEntry = { value: MetricSession; dispose: VoidFunction }
 
 export type GraphNode = {
   id: string
@@ -206,6 +210,24 @@ export type RunRecord = {
   wave: SessionStatus
 }
 
+export type MetricsSnapshot = {
+  sessionID?: string
+  title?: string
+  updatedAt: number
+  activation: number
+  quality: number
+  execution: Board["execution"]["state"]
+  verification: Board["verification"]["state"]
+  review: SpecReview["state"]
+  delivery: {
+    ready: number
+    total: number
+    files: number
+    rollback: boolean
+  }
+  retries: number
+}
+
 export type RunRecovery = {
   state: "resumable" | "interrupted" | "failed" | "awaiting"
   tone: "running" | "warning" | "blocked" | "ready"
@@ -228,6 +250,10 @@ export type RunApproval = {
 
 type RunStore = {
   runs: Record<string, RunRecord>
+}
+
+type MetricsStore = {
+  latest?: MetricsSnapshot
 }
 
 export const kitTemplates: KitTemplate[] = [
@@ -323,6 +349,8 @@ const defaultStore: KitStore = {
 const defaultRunStore: RunStore = {
   runs: {},
 }
+
+const defaultMetricsStore: MetricsStore = {}
 
 const event = (kind: KitEvent["kind"], action: KitEvent["action"], label: string): KitEvent => ({
   id: crypto.randomUUID(),
@@ -573,6 +601,23 @@ const deliveryTone = (state: DeliveryChecklist["state"]): DeliveryArtifact["tone
   if (state === "ready") return "success"
   if (state === "blocked") return "danger"
   return "warning"
+}
+
+const sameMetricsSnapshot = (left?: MetricsSnapshot, right?: MetricsSnapshot) => {
+  if (!left || !right) return left === right
+  if (left.sessionID !== right.sessionID) return false
+  if (left.title !== right.title) return false
+  if (left.activation !== right.activation) return false
+  if (left.quality !== right.quality) return false
+  if (left.execution !== right.execution) return false
+  if (left.verification !== right.verification) return false
+  if (left.review !== right.review) return false
+  if (left.delivery.ready !== right.delivery.ready) return false
+  if (left.delivery.total !== right.delivery.total) return false
+  if (left.delivery.files !== right.delivery.files) return false
+  if (left.delivery.rollback !== right.delivery.rollback) return false
+  if (left.retries !== right.retries) return false
+  return true
 }
 
 const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "session"
@@ -856,6 +901,33 @@ export function buildDeliveryPacket(input: { title?: string; board: Board; revie
   } satisfies DeliveryPacket
 }
 
+export function buildMetricsSnapshot(input: {
+  sessionID?: string
+  title?: string
+  board: Board
+  review: SpecReview
+  delivery: DeliveryPacket
+  now?: number
+}) {
+  return {
+    sessionID: input.sessionID,
+    title: input.title,
+    updatedAt: input.now ?? Date.now(),
+    activation: input.board.operations.activation,
+    quality: input.board.operations.quality,
+    execution: input.board.execution.state,
+    verification: input.board.verification.state,
+    review: input.review.state,
+    delivery: {
+      ready: input.delivery.checklist.filter((item) => item.state === "ready").length,
+      total: input.delivery.checklist.length,
+      files: input.board.delivery.files,
+      rollback: input.board.delivery.rollback,
+    },
+    retries: input.board.operations.retries,
+  } satisfies MetricsSnapshot
+}
+
 export function buildBoard(input: {
   session?: Session
   status: SessionStatus
@@ -1077,6 +1149,25 @@ export function hasRunState(input: { board: Board; status: SessionStatus }) {
   return false
 }
 
+export function resolveMetricsSnapshot(input: { board: Board; snapshot?: MetricsSnapshot; status: SessionStatus }) {
+  if (!input.snapshot) return
+  if (hasRunState({ board: input.board, status: input.status })) return
+  return input.snapshot
+}
+
+export function resolveMetricBoard(input: { board: Board; snapshot?: MetricsSnapshot; status: SessionStatus }) {
+  const snapshot = resolveMetricsSnapshot(input)
+  if (!snapshot) return input.board
+  return {
+    ...input.board,
+    operations: {
+      ...input.board.operations,
+      activation: snapshot.activation,
+      quality: snapshot.quality,
+    },
+  } satisfies Board
+}
+
 export function buildRunRecord(input: {
   sessionID: string
   title?: string
@@ -1197,6 +1288,15 @@ function pruneRunCache(cache: Map<string, RunCacheEntry>) {
   }
 }
 
+function pruneMetricCache(cache: Map<string, MetricCacheEntry>) {
+  while (cache.size > MAX_METRIC_STORES) {
+    const oldest = cache.keys().next().value as string | undefined
+    if (!oldest) return
+    cache.get(oldest)?.dispose()
+    cache.delete(oldest)
+  }
+}
+
 function createRunSession(dir: string) {
   const key = normalizeWorkspace(dir)
   const legacy = [`${key}/hyperion360-runs.v1`]
@@ -1212,6 +1312,26 @@ function createRunSession(dir: string) {
         produce((draft) => {
           draft.runs[record.sessionID] = record
           draft.runs = pruneRuns(draft.runs)
+        }),
+      ),
+  }
+}
+
+function createMetricSession(dir: string) {
+  const key = normalizeWorkspace(dir)
+  const legacy = [`${key}/hyperion360-metrics.v1`]
+  if (key !== dir) legacy.push(`${dir}/hyperion360-metrics.v1`)
+  const [store, setStore, _, ready] = persisted(Persist.workspace(key, "hyperion360-metrics", legacy), createStore<MetricsStore>(defaultMetricsStore))
+
+  return {
+    ready,
+    state: () => store,
+    latest: () => store.latest,
+    remember: (snapshot: MetricsSnapshot) =>
+      setStore(
+        produce((draft) => {
+          if (sameMetricsSnapshot(draft.latest, snapshot)) return
+          draft.latest = snapshot
         }),
       ),
   }
@@ -1358,6 +1478,42 @@ export function createWorkspaceRuns(dir: Accessor<string>) {
     state: () => state().state(),
     run: (sessionID: string) => state().run(sessionID),
     remember: (record: RunRecord) => state().remember(record),
+  }
+}
+
+export function createWorkspaceMetrics(dir: Accessor<string>) {
+  const cache = new Map<string, MetricCacheEntry>()
+
+  onCleanup(() => {
+    for (const entry of cache.values()) entry.dispose()
+    cache.clear()
+  })
+
+  const load = (directory: string) => {
+    const key = normalizeWorkspace(directory)
+    const existing = cache.get(key)
+    if (existing) {
+      cache.delete(key)
+      cache.set(key, existing)
+      return existing.value
+    }
+
+    const entry = createRoot((dispose) => ({
+      value: createMetricSession(directory),
+      dispose,
+    }))
+    cache.set(key, entry)
+    pruneMetricCache(cache)
+    return entry.value
+  }
+
+  const state = createMemo(() => load(dir()))
+
+  return {
+    ready: () => state().ready(),
+    state: () => state().state(),
+    latest: () => state().latest(),
+    remember: (snapshot: MetricsSnapshot) => state().remember(snapshot),
   }
 }
 

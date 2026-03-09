@@ -5,7 +5,7 @@ import { Button } from "@opencode-ai/ui/button"
 import { Card } from "@opencode-ai/ui/card"
 import { Icon } from "@opencode-ai/ui/icon"
 import { Tag } from "@opencode-ai/ui/tag"
-import type { Board, DeliveryPacket, GraphNode, KitEvent, KitPlaybook, KitSkill, KitTemplate, RunRecovery, SpecReview } from "@/pages/session/backlog"
+import type { Board, DeliveryPacket, GraphNode, KitEvent, KitPlaybook, KitSkill, KitTemplate, MetricsSnapshot, RunRecovery, SpecReview } from "@/pages/session/backlog"
 
 const tone = (value: string) => {
   if (value === "ready" || value === "success" || value === "completed") return "bg-emerald-500/15 text-emerald-300"
@@ -25,6 +25,7 @@ export function SessionDashboard(props: {
   board: Board
   review: SpecReview
   delivery: DeliveryPacket
+  metrics?: MetricsSnapshot
   template?: KitTemplate
   playbook?: KitPlaybook
   skills: KitSkill[]
@@ -348,7 +349,7 @@ export function SessionDashboard(props: {
             </div>
           </Card>
 
-          <Card class="p-4 flex flex-col gap-3">
+          <Card class="p-4 flex flex-col gap-3" data-metrics-source={props.metrics ? "workspace" : "live"}>
             <div class="flex items-center gap-2">
               <Icon name="console" size="small" />
               <div>
@@ -362,6 +363,15 @@ export function SessionDashboard(props: {
               <Metric label="activation" value={`${props.board.operations.activation}%`} />
               <Metric label="quality" value={`${props.board.operations.quality}%`} />
             </div>
+            <Show when={props.metrics}>
+              {(item) => (
+                <div class="flex items-center gap-2 flex-wrap text-11-regular text-text-weak">
+                  <Tag class="px-2 py-1 bg-background-strong text-text-strong">workspace snapshot</Tag>
+                  <span>Last workspace metrics snapshot{item().title ? ` · ${item().title}` : item().sessionID ? ` · ${item().sessionID}` : ""}</span>
+                  <span>{DateTime.fromMillis(item().updatedAt).toRelative() ?? "now"}</span>
+                </div>
+              )}
+            </Show>
             <div class="flex items-center gap-2 flex-wrap text-11-regular text-text-weak">
               <Tag class={`px-2 py-1 ${tone(props.board.delivery.rollback ? "ready" : "blocked")}`}>{props.board.delivery.rollback ? "rollback visible" : "rollback pending"}</Tag>
               <span>{props.board.delivery.files} changed files</span>
