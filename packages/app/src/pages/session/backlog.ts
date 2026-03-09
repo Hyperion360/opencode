@@ -269,6 +269,97 @@ export type RunApproval = {
   risks: string[]
 }
 
+export const integrationTargets = {
+  pr: {
+    kind: "pr",
+    label: "Pull request",
+    description: "Share a reviewer-ready delivery handoff in a PR body or comment.",
+    format: "markdown",
+  },
+  ci: {
+    kind: "ci",
+    label: "CI update",
+    description: "Publish validation, delivery, and metrics state to a build summary.",
+    format: "markdown",
+  },
+  issue: {
+    kind: "issue",
+    label: "Issue",
+    description: "Capture follow-up review, validation, and rollback context in a tracker.",
+    format: "markdown",
+  },
+  notification: {
+    kind: "notification",
+    label: "Notification",
+    description: "Route short review-ready, failure, and approval-needed alerts.",
+    format: "text",
+  },
+} as const
+
+export type IntegrationTarget = (typeof integrationTargets)[keyof typeof integrationTargets]
+
+export type NotificationEvent = "review-ready" | "run-failed" | "approval-needed"
+
+export type PullRequestPayload = {
+  target: (typeof integrationTargets)["pr"]
+  state: DeliveryChecklist["state"]
+  title: string
+  summary: string
+  body: string
+  files: string[]
+}
+
+export type CiPayload = {
+  target: (typeof integrationTargets)["ci"]
+  state: "success" | "pending" | "failure"
+  title: string
+  summary: string
+  body: string
+  checks: string[]
+}
+
+export type IssuePayload = {
+  target: (typeof integrationTargets)["issue"]
+  state: DeliveryChecklist["state"]
+  title: string
+  summary: string
+  body: string
+  labels: string[]
+}
+
+export type IntegrationNotificationPayload = {
+  target: (typeof integrationTargets)["notification"]
+  event: NotificationEvent
+  tone: ReviewSignal["tone"]
+  title: string
+  summary: string
+  body: string
+}
+
+export type IntegrationPayloads = {
+  pr: PullRequestPayload
+  ci: CiPayload
+  issue: IssuePayload
+  notification: {
+    reviewReady: IntegrationNotificationPayload
+    runFailed: IntegrationNotificationPayload
+    approvalNeeded: IntegrationNotificationPayload
+  }
+}
+
+type IntegrationState = DeliveryChecklist["state"]
+
+type IntegrationInput = {
+  sessionID?: string
+  title?: string
+  board: Board
+  review: SpecReview
+  delivery: DeliveryPacket
+  diffs: FileDiff[]
+  metrics?: MetricsSnapshot
+  recovery?: RunRecovery
+}
+
 type RunStore = {
   runs: Record<string, RunRecord>
 }
@@ -948,6 +1039,201 @@ export function buildMetricsSnapshot(input: {
     },
     retries: input.board.operations.retries,
   } satisfies MetricsSnapshot
+}
+
+const integration = (input: IntegrationInput) => {
+  const readiness = buildMetricsReadiness({
+    board: input.board,
+    review: input.review,
+    delivery: input.delivery,
+    snapshot: input.metrics,
+  })
+  const activation = input.metrics?.activation ?? input.board.operations.activation
+  const quality = input.metrics?.quality ?? input.board.operations.quality
+  const verification = input.metrics?.verification ?? input.board.verification.state
+  const review = input.metrics?.review ?? input.review.state
+  const state: IntegrationState =
+    verification === "blocked" || review === "blocked"
+      ? "blocked"
+      : readiness.total > 0 && readiness.ready === readiness.total && readiness.rollback
+        ? "ready"
+        : "warning"
+
+  return {
+    name: text(input.title) ?? text(input.delivery.title) ?? input.sessionID ?? "Session delivery packet",
+    readiness,
+    activation,
+    quality,
+    verification,
+    review,
+    state,
+  }
+}
+
+const integrationFiles = (diffs: FileDiff[]) => diffs.slice(0, 6).map((item) => `${item.file} (+${item.additions}/-${item.deletions})`)
+
+const integrationChecks = (board: Board) =>
+  board.verification.checks.slice(0, 6).map((item) => `${item.title} · ${item.status} · ${item.detail}`)
+
+export function buildPullRequestPayload(input: IntegrationInput) {
+  const data = integration(input)
+  const title = `${data.name} · PR handoff`
+  const files = integrationFiles(input.diffs)
+
+  return {
+    target: integrationTargets.pr,
+    state: data.state,
+    title,
+    summary: `${input.delivery.summary} ${input.review.summary}`,
+    body: [
+      input.delivery.body,
+      "",
+      "## Integration context",
+      `- Review: ${input.review.label}`,
+      `- Validation: ${input.board.verification.summary}`,
+      `- Activation: ${data.activation}%`,
+      `- Quality: ${data.quality}%`,
+      `- Delivery readiness: ${data.readiness.ready} / ${data.readiness.total}`,
+    ].join("\n"),
+    files,
+  } satisfies PullRequestPayload
+}
+
+export function buildCiPayload(input: IntegrationInput) {
+  const data = integration(input)
+  const state = data.state === "ready" ? "success" : data.state === "blocked" ? "failure" : "pending"
+  const title = `${data.name} · CI summary`
+  const checks = integrationChecks(input.board)
+
+  return {
+    target: integrationTargets.ci,
+    state,
+    title,
+    summary: input.board.verification.summary,
+    body: [
+      `# ${title}`,
+      "",
+      `Status: ${state}`,
+      `Summary: ${input.board.verification.summary}`,
+      "",
+      "## Checks",
+      ...(checks.length > 0 ? checks.map((item) => `- ${item}`) : ["- No validation checks are attached yet."]),
+      "",
+      "## Delivery context",
+      `- Review: ${input.review.label}`,
+      `- Delivery: ${input.delivery.summary}`,
+      `- Activation: ${data.activation}%`,
+      `- Quality: ${data.quality}%`,
+      `- Rollback: ${data.readiness.rollback ? "visible" : "pending"}`,
+    ].join("\n"),
+    checks,
+  } satisfies CiPayload
+}
+
+export function buildIssuePayload(input: IntegrationInput) {
+  const data = integration(input)
+  const title = `${data.name} · follow-up issue`
+  const checks = integrationChecks(input.board)
+  const files = integrationFiles(input.diffs)
+  const risks = input.review.risks.slice(0, 6).map((item) => `- ${item.title}: ${item.detail}`)
+
+  return {
+    target: integrationTargets.issue,
+    state: data.state,
+    title,
+    summary: input.review.risks[0]?.detail ?? input.board.verification.summary,
+    body: [
+      `# ${title}`,
+      "",
+      `State: ${data.state}`,
+      `Summary: ${input.review.risks[0]?.detail ?? input.board.verification.summary}`,
+      "",
+      "## Reviewer risks",
+      ...(risks.length > 0 ? risks : ["- No reviewer risks are attached yet."]),
+      "",
+      "## Validation",
+      `- ${input.board.verification.summary}`,
+      ...(checks.length > 0 ? checks.map((item) => `- ${item}`) : ["- No validation checks are attached yet."]),
+      "",
+      "## Changed files",
+      ...(files.length > 0 ? files.map((item) => `- ${item}`) : ["- No changed files are attached yet."]),
+    ].join("\n"),
+    labels: [
+      data.state,
+      data.verification === "blocked" ? "validation" : undefined,
+      input.review.risks.length > 0 ? "review" : undefined,
+      data.readiness.rollback ? undefined : "rollback",
+    ].filter((item): item is string => !!item),
+  } satisfies IssuePayload
+}
+
+export function buildNotificationPayload(input: IntegrationInput & { event: NotificationEvent }) {
+  const data = integration(input)
+
+  if (input.event === "review-ready") {
+    return {
+      target: integrationTargets.notification,
+      event: input.event,
+      tone: data.state === "ready" ? "success" : "warning",
+      title: `${data.name} ready for review`,
+      summary: `${input.delivery.summary} ${input.review.summary}`,
+      body: [
+        `Review: ${input.review.label}`,
+        `Validation: ${input.board.verification.summary}`,
+        `Delivery: ${input.delivery.summary}`,
+        `Metrics: activation ${data.activation}% · quality ${data.quality}%`,
+      ].join("\n"),
+    } satisfies IntegrationNotificationPayload
+  }
+
+  if (input.event === "run-failed") {
+    return {
+      target: integrationTargets.notification,
+      event: input.event,
+      tone: "danger",
+      title: `${data.name} needs follow-up`,
+      summary: input.review.risks[0]?.detail ?? input.board.verification.summary,
+      body: [
+        `Validation: ${input.board.verification.summary}`,
+        `Review: ${input.review.summary}`,
+        ...(input.review.risks.length > 0
+          ? ["Risk signals:", ...input.review.risks.slice(0, 4).map((item) => `- ${item.title}`)]
+          : ["Risk signals:", "- No reviewer risks are attached yet."]),
+      ].join("\n"),
+    } satisfies IntegrationNotificationPayload
+  }
+
+  const risks = input.recovery?.approval?.risks ?? input.review.risks.map((item) => item.title)
+  const summary = input.recovery?.approval?.detail ?? input.recovery?.detail ?? "Operator approval is needed before continuing this run."
+
+  return {
+    target: integrationTargets.notification,
+    event: input.event,
+    tone: "warning",
+    title: `${data.name} needs approval`,
+    summary,
+    body: [
+      summary,
+      "",
+      "Risk signals:",
+      ...(risks.length > 0 ? risks.map((item) => `- ${item}`) : ["- recovered continuation needs explicit operator approval"]),
+      "",
+      `Metrics: activation ${data.activation}% · quality ${data.quality}%`,
+    ].join("\n"),
+  } satisfies IntegrationNotificationPayload
+}
+
+export function buildIntegrationPayloads(input: IntegrationInput) {
+  return {
+    pr: buildPullRequestPayload(input),
+    ci: buildCiPayload(input),
+    issue: buildIssuePayload(input),
+    notification: {
+      reviewReady: buildNotificationPayload({ ...input, event: "review-ready" }),
+      runFailed: buildNotificationPayload({ ...input, event: "run-failed" }),
+      approvalNeeded: buildNotificationPayload({ ...input, event: "approval-needed" }),
+    },
+  } satisfies IntegrationPayloads
 }
 
 export function buildMetricsReadiness(input: { board: Board; review: SpecReview; delivery: DeliveryPacket; snapshot?: MetricsSnapshot }) {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { applyTemplate, buildApprovalPrompt, buildBoard, buildDeliveryPacket, buildMetricTrends, buildMetricsReadiness, buildMetricsSnapshot, buildPlaybookPrompt, buildRecoveryPrompt, buildResumePrompt, buildReviewPrompt, buildRetryPrompt, buildSpecReview, kitTemplates } from "./backlog"
+import { applyTemplate, buildApprovalPrompt, buildBoard, buildCiPayload, buildDeliveryPacket, buildIntegrationPayloads, buildMetricTrends, buildMetricsReadiness, buildMetricsSnapshot, buildNotificationPayload, buildPlaybookPrompt, buildPullRequestPayload, buildRecoveryPrompt, buildResumePrompt, buildReviewPrompt, buildRetryPrompt, buildSpecReview, kitTemplates } from "./backlog"
 
 describe("session backlog helpers", () => {
   test("applies a template as structured intake", () => {
@@ -363,6 +363,145 @@ describe("session backlog helpers", () => {
         retries: 0,
       }),
     )
+  })
+
+  test("builds reusable outbound payloads from accepted delivery state", () => {
+    const diffs = [
+      { file: "src/app.ts", before: "a", after: "b", additions: 3, deletions: 1, status: "modified" as const },
+      { file: "src/review.ts", before: "a", after: "b", additions: 2, deletions: 0, status: "modified" as const },
+    ]
+    const board = buildBoard({
+      session: {
+        id: "s11",
+        slug: "s11",
+        projectID: "p1",
+        directory: "/tmp/app",
+        title: "Pilot handoff",
+        version: "1",
+        time: { created: 0, updated: 0 },
+        revert: { messageID: "m1" },
+      },
+      status: { type: "idle" },
+      todos: [
+        { id: "t1", content: "Implement", status: "completed", priority: "high" },
+        { id: "t2", content: "Verify", status: "completed", priority: "medium" },
+      ],
+      diffs,
+      messages: [{ id: "m1", sessionID: "s11", role: "assistant", time: { created: 10 }, parentID: "u1", modelID: "m", providerID: "p", mode: "default", agent: "implementor", path: { cwd: "/tmp/app", root: "/tmp/app" }, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }],
+      parts: [{ id: "p1", sessionID: "s11", messageID: "m1", type: "tool", callID: "c1", tool: "test", state: { status: "completed", input: { command: "bun run test:unit" }, output: "12 pass", title: "Unit tests", metadata: {}, time: { start: 10, end: 11 }, attachments: [] } }],
+      agents: [{ name: "implementor", mode: "primary", permission: [], options: {} }],
+      commands: [],
+      now: 120_000,
+    })
+    const review = buildSpecReview({
+      board,
+      spec: {
+        ready: true,
+        state: "approved",
+        input: {
+          goal: "Ship integration builders",
+          constraints: "keep delivery evidence intact",
+          acceptance: "generate reusable outbound payloads",
+        },
+      },
+    })
+    const delivery = buildDeliveryPacket({
+      title: "Pilot handoff",
+      board,
+      review,
+      diffs,
+      now: 120_000,
+    })
+    const metrics = buildMetricsSnapshot({
+      sessionID: "s11",
+      title: "Pilot handoff",
+      board,
+      review,
+      delivery,
+      now: 321,
+    })
+    const pr = buildPullRequestPayload({ sessionID: "s11", title: "Pilot handoff", board, review, delivery, diffs, metrics })
+    const ci = buildCiPayload({ sessionID: "s11", title: "Pilot handoff", board, review, delivery, diffs, metrics })
+    const payloads = buildIntegrationPayloads({ sessionID: "s11", title: "Pilot handoff", board, review, delivery, diffs, metrics })
+
+    expect(pr).toEqual(
+      expect.objectContaining({
+        target: expect.objectContaining({ kind: "pr", label: "Pull request" }),
+        state: "ready",
+        files: expect.arrayContaining(["src/app.ts (+3/-1)"]),
+      }),
+    )
+    expect(pr.body).toContain("## Integration context")
+    expect(ci).toEqual(
+      expect.objectContaining({
+        target: expect.objectContaining({ kind: "ci", label: "CI update" }),
+        state: "success",
+        checks: expect.arrayContaining(["Test · completed · Unit tests"]),
+      }),
+    )
+    expect(payloads.issue.labels).toEqual(expect.arrayContaining(["ready"]))
+    expect(payloads.notification.reviewReady).toEqual(
+      expect.objectContaining({
+        target: expect.objectContaining({ kind: "notification" }),
+        tone: "success",
+        title: expect.stringContaining("ready for review"),
+      }),
+    )
+  })
+
+  test("falls back to live state and generic approval copy when integration context is incomplete", () => {
+    const diffs = [{ file: "src/app.ts", before: "a", after: "b", additions: 4, deletions: 1, status: "modified" as const }]
+    const board = buildBoard({
+      session: {
+        id: "s12",
+        slug: "s12",
+        projectID: "p1",
+        directory: "/tmp/app",
+        title: "Blocked handoff",
+        version: "1",
+        time: { created: 0, updated: 0 },
+      },
+      status: { type: "idle" },
+      todos: [{ id: "t1", content: "Verify integration payloads", status: "in_progress", priority: "high" }],
+      diffs,
+      messages: [],
+      parts: [],
+      agents: [],
+      commands: [],
+      now: 120_000,
+    })
+    const review = buildSpecReview({
+      board,
+      spec: {
+        ready: true,
+        state: "approved",
+        input: {
+          goal: "Ship integration builders",
+          constraints: "stay additive",
+          acceptance: "preserve current review signals",
+        },
+      },
+    })
+    const delivery = buildDeliveryPacket({
+      title: "Blocked handoff",
+      board,
+      review,
+      diffs,
+      now: 120_000,
+    })
+    const pr = buildPullRequestPayload({ sessionID: "s12", title: "Blocked handoff", board, review, delivery, diffs })
+    const failed = buildNotificationPayload({ sessionID: "s12", title: "Blocked handoff", board, review, delivery, diffs, event: "run-failed" })
+    const approval = buildNotificationPayload({ sessionID: "s12", title: "Blocked handoff", board, review, delivery, diffs, event: "approval-needed" })
+    const payloads = buildIntegrationPayloads({ sessionID: "s12", title: "Blocked handoff", board, review, delivery, diffs })
+
+    expect(pr.state).toBe("blocked")
+    expect(pr.body).toContain("Activation: 0%")
+    expect(payloads.ci.state).toBe("failure")
+    expect(payloads.ci.body).toContain("No validation evidence is attached to the current diff set.")
+    expect(payloads.issue.labels).toEqual(expect.arrayContaining(["blocked", "validation", "review", "rollback"]))
+    expect(failed.summary).toContain("no tests, typechecks, or review commands")
+    expect(approval.summary).toBe("Operator approval is needed before continuing this run.")
+    expect(approval.body).toContain("- Validation evidence is missing")
   })
 
   test("builds dashboard readiness cues from a persisted metrics fallback", () => {
