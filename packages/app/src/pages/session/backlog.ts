@@ -228,6 +228,16 @@ export type MetricsSnapshot = {
   retries: number
 }
 
+export type MetricsReadiness = {
+  source: "live" | "workspace"
+  retries: number
+  files: number
+  rollback: boolean
+  ready: number
+  total: number
+  signals: ReviewSignal[]
+}
+
 export type RunRecovery = {
   state: "resumable" | "interrupted" | "failed" | "awaiting"
   tone: "running" | "warning" | "blocked" | "ready"
@@ -926,6 +936,60 @@ export function buildMetricsSnapshot(input: {
     },
     retries: input.board.operations.retries,
   } satisfies MetricsSnapshot
+}
+
+export function buildMetricsReadiness(input: { board: Board; review: SpecReview; delivery: DeliveryPacket; snapshot?: MetricsSnapshot }) {
+  const source = input.snapshot ? "workspace" : "live"
+  const label = source === "workspace" ? "Persisted workspace snapshot" : "Current session state"
+  const activation = input.snapshot?.activation ?? input.board.operations.activation
+  const quality = input.snapshot?.quality ?? input.board.operations.quality
+  const verification = input.snapshot?.verification ?? input.board.verification.state
+  const review = input.snapshot?.review ?? input.review.state
+  const ready = input.snapshot?.delivery.ready ?? input.delivery.checklist.filter((item) => item.state === "ready").length
+  const total = input.snapshot?.delivery.total ?? input.delivery.checklist.length
+  const files = input.snapshot?.delivery.files ?? input.board.delivery.files
+  const rollback = input.snapshot?.delivery.rollback ?? input.board.delivery.rollback
+  const retries = input.snapshot?.retries ?? input.board.operations.retries
+  const handoff =
+    total > 0 && ready === total && verification === "ready" && review === "ready" && rollback
+      ? signal("handoff", "Delivery handoff", `All ${total} delivery checks are ready, rollback is visible, and the handoff packet can move to review.`, "success")
+      : verification === "blocked" || review === "blocked"
+        ? signal(
+            "handoff",
+            "Delivery handoff",
+            `${label} still needs operator follow-up because validation is ${verification} and review is ${review}.`,
+            "danger",
+          )
+        : total === 0 && files === 0
+          ? signal("handoff", "Delivery handoff", `${label} does not have a delivery packet attached yet, so readiness still depends on a fresh validation pass.`, "warning")
+          : signal(
+              "handoff",
+              "Delivery handoff",
+              `${ready} of ${total} delivery checks are ready, ${plural(retries, "retry")} are recorded${rollback ? ", and rollback is visible." : ", but rollback evidence is still pending."}`,
+              "warning",
+            )
+
+  return {
+    source,
+    retries,
+    files,
+    rollback,
+    ready,
+    total,
+    signals: [
+      activation >= 80
+        ? signal("activation", "Activation readiness", `${label} keeps activation at ${activation}%, so the run is materially complete.`, "success")
+        : activation >= 50
+          ? signal("activation", "Activation readiness", `${label} keeps activation at ${activation}%, so more execution still needs to land before handoff.`, "warning")
+          : signal("activation", "Activation readiness", `${label} keeps activation at only ${activation}%, so the run is not ready for handoff yet.`, "danger"),
+      quality >= 85
+        ? signal("quality", "Quality guardrail", `${label} keeps quality at ${quality}% with validation ${verification} and review ${review}.`, "success")
+        : quality >= 60
+          ? signal("quality", "Quality guardrail", `${label} keeps quality at ${quality}%, so validation and review follow-up are still in flight.`, "warning")
+          : signal("quality", "Quality guardrail", `${label} keeps quality at only ${quality}%, so validation or reviewer confidence is still too weak for handoff.`, "danger"),
+      handoff,
+    ],
+  } satisfies MetricsReadiness
 }
 
 export function buildBoard(input: {

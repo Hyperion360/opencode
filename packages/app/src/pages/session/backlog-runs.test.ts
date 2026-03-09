@@ -241,10 +241,20 @@ describe("workspace run persistence", () => {
       retries: 1,
     } as const
 
+    const metric = backlog.resolveMetricsSnapshot({
+      board: board({ state: "idle", total: 0 }),
+      snapshot,
+      status: { type: "idle" },
+    })
     const restored = backlog.resolveMetricBoard({
       board: board({ state: "idle", total: 0 }),
       snapshot,
       status: { type: "idle" },
+    })
+    const active = backlog.resolveMetricsSnapshot({
+      board: board({ state: "running", total: 1, activation: 14, quality: 33 }),
+      snapshot,
+      status: { type: "busy" },
     })
     const live = backlog.resolveMetricBoard({
       board: board({ state: "running", total: 1, activation: 14, quality: 33 }),
@@ -252,6 +262,8 @@ describe("workspace run persistence", () => {
       status: { type: "busy" },
     })
 
+    expect(metric).toEqual(snapshot)
+    expect(active).toBeUndefined()
     expect(restored.operations.activation).toBe(67)
     expect(restored.operations.quality).toBe(82)
     expect(live.operations.activation).toBe(14)

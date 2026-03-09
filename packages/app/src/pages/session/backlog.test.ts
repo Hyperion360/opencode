@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { applyTemplate, buildApprovalPrompt, buildBoard, buildDeliveryPacket, buildMetricsSnapshot, buildPlaybookPrompt, buildRecoveryPrompt, buildResumePrompt, buildReviewPrompt, buildRetryPrompt, buildSpecReview, kitTemplates } from "./backlog"
+import { applyTemplate, buildApprovalPrompt, buildBoard, buildDeliveryPacket, buildMetricsReadiness, buildMetricsSnapshot, buildPlaybookPrompt, buildRecoveryPrompt, buildResumePrompt, buildReviewPrompt, buildRetryPrompt, buildSpecReview, kitTemplates } from "./backlog"
 
 describe("session backlog helpers", () => {
   test("applies a template as structured intake", () => {
@@ -365,6 +365,81 @@ describe("session backlog helpers", () => {
     )
   })
 
+  test("builds dashboard readiness cues from a persisted metrics fallback", () => {
+    const board = buildBoard({
+      session: {
+        id: "s9",
+        slug: "s9",
+        projectID: "p1",
+        directory: "/tmp/app",
+        title: "Pilot run",
+        version: "1",
+        time: { created: 0, updated: 0 },
+      },
+      status: { type: "idle" },
+      todos: [],
+      diffs: [],
+      messages: [],
+      parts: [],
+      agents: [],
+      commands: [],
+      now: 120_000,
+    })
+    const review = buildSpecReview({
+      board,
+      spec: {
+        ready: true,
+        state: "approved",
+        input: {
+          goal: "Recover persisted metrics",
+          constraints: "keep live-state precedence",
+          acceptance: "show fallback readiness",
+        },
+      },
+    })
+    const delivery = buildDeliveryPacket({
+      title: "Pilot run",
+      board,
+      review,
+      diffs: [],
+      now: 120_000,
+    })
+    const readiness = buildMetricsReadiness({
+      board,
+      review,
+      delivery,
+      snapshot: {
+        sessionID: "s9",
+        title: "Pilot run",
+        updatedAt: 321,
+        activation: 24,
+        quality: 45,
+        execution: "retry",
+        verification: "blocked",
+        review: "warning",
+        delivery: {
+          ready: 2,
+          total: 4,
+          files: 3,
+          rollback: true,
+        },
+        retries: 2,
+      },
+    })
+
+    expect(readiness.source).toBe("workspace")
+    expect(readiness.retries).toBe(2)
+    expect(readiness.files).toBe(3)
+    expect(readiness.rollback).toBe(true)
+    expect(readiness.signals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "activation", tone: "danger", detail: expect.stringContaining("only 24%") }),
+        expect.objectContaining({ id: "quality", tone: "danger", detail: expect.stringContaining("only 45%") }),
+        expect.objectContaining({ id: "handoff", tone: "danger", detail: expect.stringContaining("validation is blocked") }),
+      ]),
+    )
+  })
+
   test("surfaces retry api errors in activity", () => {
     const board = buildBoard({
       session: {
@@ -463,7 +538,10 @@ describe("session backlog helpers", () => {
     const view = await Bun.file(new URL("../../components/session/session-dashboard.tsx", import.meta.url)).text()
 
     expect(view).toContain("data-metrics-source")
+    expect(view).toContain("data-metrics-readiness-source")
+    expect(view).toContain("data-metrics-readiness")
     expect(view).toContain("workspace snapshot")
     expect(view).toContain("Last workspace metrics snapshot")
+    expect(view).toContain("buildMetricsReadiness")
   })
 })

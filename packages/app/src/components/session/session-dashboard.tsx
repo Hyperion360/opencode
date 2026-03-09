@@ -5,7 +5,7 @@ import { Button } from "@opencode-ai/ui/button"
 import { Card } from "@opencode-ai/ui/card"
 import { Icon } from "@opencode-ai/ui/icon"
 import { Tag } from "@opencode-ai/ui/tag"
-import type { Board, DeliveryPacket, GraphNode, KitEvent, KitPlaybook, KitSkill, KitTemplate, MetricsSnapshot, RunRecovery, SpecReview } from "@/pages/session/backlog"
+import { buildMetricsReadiness, type Board, type DeliveryPacket, type GraphNode, type KitEvent, type KitPlaybook, type KitSkill, type KitTemplate, type MetricsSnapshot, type RunRecovery, type SpecReview } from "@/pages/session/backlog"
 
 const tone = (value: string) => {
   if (value === "ready" || value === "success" || value === "completed") return "bg-emerald-500/15 text-emerald-300"
@@ -43,6 +43,7 @@ export function SessionDashboard(props: {
   })
 
   const current = createMemo(() => props.board.verification.checks.find((item) => item.id === drawer.id) ?? props.board.verification.checks[0])
+  const readiness = createMemo(() => buildMetricsReadiness({ board: props.board, review: props.review, delivery: props.delivery, snapshot: props.metrics }))
 
   const open = (id?: string) => {
     if (!id) return
@@ -359,7 +360,7 @@ export function SessionDashboard(props: {
             </div>
             <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-12-medium">
               <Metric label="audit" value={props.board.operations.audit} />
-              <Metric label="retries" value={props.board.operations.retries} />
+              <Metric label="retries" value={readiness().retries} />
               <Metric label="activation" value={`${props.board.operations.activation}%`} />
               <Metric label="quality" value={`${props.board.operations.quality}%`} />
             </div>
@@ -372,11 +373,28 @@ export function SessionDashboard(props: {
                 </div>
               )}
             </Show>
+            <div class="grid gap-2 lg:grid-cols-3" data-metrics-readiness-source={readiness().source}>
+              <For each={readiness().signals}>
+                {(item) => (
+                  <div data-metrics-readiness={item.id} class="rounded-lg border border-border-weak px-3 py-3 bg-background-strong/40 flex flex-col gap-2">
+                    <div class="flex items-center justify-between gap-2">
+                      <div class="text-12-medium text-text-strong">{item.label}</div>
+                      <Tag class={`px-2 py-1 ${tone(item.tone)}`}>{item.tone}</Tag>
+                    </div>
+                    <div class="text-11-regular text-text-weak">{item.detail}</div>
+                  </div>
+                )}
+              </For>
+            </div>
             <div class="flex items-center gap-2 flex-wrap text-11-regular text-text-weak">
-              <Tag class={`px-2 py-1 ${tone(props.board.delivery.rollback ? "ready" : "blocked")}`}>{props.board.delivery.rollback ? "rollback visible" : "rollback pending"}</Tag>
-              <span>{props.board.delivery.files} changed files</span>
-              <span>{props.board.delivery.additions}+ / {props.board.delivery.deletions}-</span>
-              <span>{props.board.operations.duration} min elapsed</span>
+              <Tag class={`px-2 py-1 ${tone(readiness().rollback ? "ready" : "blocked")}`}>{readiness().rollback ? "rollback visible" : "rollback pending"}</Tag>
+              <span>{readiness().files} changed files</span>
+              <Show when={readiness().total > 0}>
+                <span>{readiness().ready} / {readiness().total} delivery checks ready</span>
+              </Show>
+              <Show when={props.metrics} fallback={<span>{props.board.operations.duration} min elapsed</span>}>
+                {(item) => <span>{item().verification} validation · {item().review} review</span>}
+              </Show>
             </div>
             <div class="flex flex-col gap-2">
               <For each={props.board.activity}>
