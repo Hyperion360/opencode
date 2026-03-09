@@ -8,7 +8,13 @@ type BacklogModule = typeof import("./backlog")
 const saved = new Map<string, string>()
 let backlog: BacklogModule
 
-const board = (input: { state: "idle" | "running" | "retry"; total: number; title?: string }) =>
+const board = (input: {
+  state: "idle" | "running" | "retry"
+  total: number
+  title?: string
+  verify?: Board["verification"]["state"]
+  files?: number
+}) =>
   ({
     execution: {
       total: input.total,
@@ -31,9 +37,19 @@ const board = (input: { state: "idle" | "running" | "retry"; total: number; titl
             ],
     },
     verification: {
-      state: input.state === "idle" ? "idle" : "blocked",
-      label: input.state === "idle" ? "Awaiting verification" : "Delivery blocked",
-      summary: input.state === "idle" ? "Waiting for evidence." : "Recovery is still in progress.",
+      state: input.verify ?? (input.state === "idle" ? "idle" : "blocked"),
+      label:
+        (input.verify ?? (input.state === "idle" ? "idle" : "blocked")) === "ready"
+          ? "Ready for delivery"
+          : (input.verify ?? (input.state === "idle" ? "idle" : "blocked")) === "blocked"
+            ? "Delivery blocked"
+            : "Awaiting verification",
+      summary:
+        (input.verify ?? (input.state === "idle" ? "idle" : "blocked")) === "ready"
+          ? "Validation evidence is attached."
+          : input.state === "idle"
+            ? "Waiting for evidence."
+            : "Recovery is still in progress.",
       total: input.total,
       passed: 0,
       failed: input.state === "retry" ? 1 : 0,
@@ -43,8 +59,8 @@ const board = (input: { state: "idle" | "running" | "retry"; total: number; titl
       checks: [],
     },
     delivery: {
-      files: input.total,
-      additions: input.total,
+      files: input.files ?? input.total,
+      additions: input.files ?? input.total,
       deletions: 0,
       patches: 0,
       rollback: false,
@@ -123,11 +139,17 @@ describe("workspace run persistence", () => {
       record,
       status: { type: "busy" },
     })
+    const liveRecovery = backlog.resolveRunRecovery({
+      live: board({ state: "running", total: 1, title: "Fresh live state" }),
+      record,
+      status: { type: "busy" },
+    })
 
     expect(restored.execution.state).toBe("retry")
     expect(restored.execution.nodes[0]?.label).toBe("Recover orchestration state")
     expect(fresh.execution.state).toBe("running")
     expect(fresh.activity[0]?.title).toBe("Fresh live state")
+    expect(liveRecovery).toBeUndefined()
   })
 
   test("persists and rehydrates run records per canonical workspace", () => {
@@ -157,5 +179,64 @@ describe("workspace run persistence", () => {
       if (restored?.wave.type === "retry") expect(restored.wave.attempt).toBe(3)
       dispose()
     })
+  })
+
+  test("surfaces a resumable recovery when only persisted running state remains", () => {
+    const record = backlog.buildRunRecord({
+      sessionID: "s2",
+      title: "Durable run",
+      updatedAt: 15,
+      board: board({ state: "running", total: 2, title: "Resume orchestration" }),
+      wave: { type: "busy" },
+    })
+
+    const recovery = backlog.resolveRunRecovery({
+      live: board({ state: "idle", total: 0 }),
+      record,
+      status: { type: "idle" },
+    })
+
+    expect(recovery?.state).toBe("resumable")
+    expect(recovery?.action.kind).toBe("resume")
+  })
+
+  test("surfaces a failed recovery when the persisted run ended in retry", () => {
+    const record = backlog.buildRunRecord({
+      sessionID: "s3",
+      title: "Durable run",
+      updatedAt: 20,
+      board: board({ state: "retry", total: 1, title: "Recover orchestration state" }),
+      wave: { type: "retry", attempt: 2, message: "quota exceeded", next: 1 },
+    })
+
+    const recovery = backlog.resolveRunRecovery({
+      live: board({ state: "idle", total: 0 }),
+      record,
+      status: { type: "idle" },
+    })
+
+    expect(recovery?.state).toBe("failed")
+    expect(recovery?.action.kind).toBe("recover")
+    expect(recovery?.detail).toContain("quota exceeded")
+  })
+
+  test("surfaces operator review when recovered delivery evidence is waiting", () => {
+    const record = backlog.buildRunRecord({
+      sessionID: "s4",
+      title: "Durable run",
+      updatedAt: 30,
+      board: board({ state: "idle", total: 1, title: "Prepare handoff", verify: "ready", files: 2 }),
+      wave: { type: "idle" },
+    })
+
+    const recovery = backlog.resolveRunRecovery({
+      live: board({ state: "idle", total: 0 }),
+      record,
+      status: { type: "idle" },
+    })
+
+    expect(recovery?.state).toBe("awaiting")
+    expect(recovery?.action.kind).toBe("review")
+    expect(recovery?.title).toBe("Awaiting delivery review")
   })
 })

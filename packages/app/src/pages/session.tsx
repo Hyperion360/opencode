@@ -37,7 +37,8 @@ import { useComments } from "@/context/comments"
 import { ConstrainDragYAxis, getDraggableId } from "@/utils/solid-dnd"
 import { usePermission } from "@/context/permission"
 import { showToast } from "@opencode-ai/ui/toast"
-import { SessionHeader, SessionContextTab, SortableTab, FileVisual, NewSessionView } from "@/components/session"
+import { SessionHeader, SessionContextTab, SortableTab, FileVisual } from "@/components/session"
+import { SessionDashboard } from "@/components/session/session-dashboard"
 import { navMark, navParams } from "@/utils/perf"
 import { same } from "@/utils/same"
 import { createOpenReviewFile, focusTerminalById, getTabReorderIndex } from "@/pages/session/helpers"
@@ -53,6 +54,19 @@ import {
 import { TerminalPanel } from "@/pages/session/terminal-panel"
 import { terminalTabLabel } from "@/pages/session/terminal-label"
 import { MessageTimeline } from "@/pages/session/message-timeline"
+import {
+  buildBoard,
+  buildPlaybookPrompt,
+  buildRetryPrompt,
+  buildRunRecord,
+  createWorkspaceKit,
+  createWorkspaceRuns,
+  hasRunState,
+  kitPlaybooks,
+  kitSkills,
+  kitTemplates,
+  resolveRunBoard,
+} from "@/pages/session/backlog"
 import { useSessionCommands } from "@/pages/session/use-session-commands"
 import { SessionPromptDock } from "@/pages/session/session-prompt-dock"
 import { SessionMobileTabs } from "@/pages/session/session-mobile-tabs"
@@ -102,6 +116,8 @@ export default function Page() {
   const prompt = usePrompt()
   const comments = useComments()
   const permission = usePermission()
+  const kit = createWorkspaceKit(() => sdk.directory)
+  const runs = createWorkspaceRuns(() => sdk.directory)
 
   const permRequest = createMemo(() => {
     const sessionID = params.id
@@ -306,6 +322,8 @@ export default function Page() {
   const hasReview = createMemo(() => reviewCount() > 0)
   const revertMessageID = createMemo(() => info()?.revert?.messageID)
   const messages = createMemo(() => (params.id ? (sync.data.message[params.id] ?? []) : []))
+  const parts = createMemo(() => messages().flatMap((message) => sync.data.part[message.id] ?? []))
+  const todos = createMemo(() => (params.id ? (sync.data.todo[params.id] ?? []) : []))
   const messagesReady = createMemo(() => {
     const id = params.id
     if (!id) return true
@@ -594,6 +612,18 @@ export default function Page() {
     if (project && sdk.directory !== project.worktree) return sdk.directory
     return "main"
   })
+  const worktrees = createMemo(() => {
+    const project = sync.project
+    const items = ["main", "create", ...(project?.sandboxes ?? [])]
+    const current = newSessionWorktree()
+    return items.includes(current) ? items : [...items, current]
+  })
+
+  const worktreeLabel = (value: string) => {
+    if (value === "main") return sync.project?.worktree ?? "main"
+    if (value === "create") return language.t("session.new.worktree.create")
+    return value
+  }
 
   const activeMessage = createMemo(() => {
     if (!store.messageId) return lastUserMessage()
@@ -685,6 +715,14 @@ export default function Page() {
   })
 
   createEffect(() => {
+    const id = params.id
+    if (!id) return
+    if (sync.data.todo[id] !== undefined) return
+    if (sync.status === "loading") return
+    void sync.session.todo(id)
+  })
+
+  createEffect(() => {
     if (!view().terminal.opened()) {
       setUi("autoCreated", false)
       return
@@ -734,6 +772,78 @@ export default function Page() {
   )
 
   const status = createMemo(() => sync.data.session_status[params.id ?? ""] ?? idle)
+  const selectedTemplate = createMemo(() => kitTemplates.find((item) => item.id === kit.template()))
+  const selectedPlaybook = createMemo(() => kitPlaybooks.find((item) => item.id === kit.playbook()))
+  const selectedSkills = createMemo(() => kit.skills().flatMap((id) => kitSkills.find((item) => item.id === id) ?? []))
+  const liveBoard = createMemo(() =>
+    buildBoard({
+      session: info(),
+      status: status(),
+      todos: todos(),
+      parts: parts(),
+      messages: messages(),
+      diffs: diffs(),
+      agents: sync.data.agent,
+      commands: sync.data.command,
+    }),
+  )
+  const run = createMemo(() => {
+    if (!runs.ready()) return
+    const id = params.id
+    if (!id) return
+    return runs.run(id)
+  })
+  const board = createMemo(() => {
+    if (!runs.ready()) return liveBoard()
+    return resolveRunBoard({
+      live: liveBoard(),
+      record: run(),
+      status: status(),
+    })
+  })
+
+  const stagePrompt = (value: string) => {
+    prompt.set([{ type: "text", content: value, start: 0, end: value.length }], value.length)
+  }
+
+  const stagePlaybook = () => {
+    stagePrompt(
+      buildPlaybookPrompt({
+        template: selectedTemplate()?.label,
+        playbook: selectedPlaybook()?.label,
+        skills: selectedSkills().map((item) => item.label),
+      }),
+    )
+  }
+
+  const retryNode = (id: string) => {
+    const node = board().execution.nodes.find((item) => item.id === id)
+    if (!node) return
+    stagePrompt(
+      buildRetryPrompt({
+        node: node.label,
+        template: selectedTemplate()?.label,
+        playbook: selectedPlaybook()?.label,
+        skills: selectedSkills().map((item) => item.label),
+      }),
+    )
+  }
+
+  createEffect(() => {
+    if (!runs.ready()) return
+    const id = params.id
+    if (!id) return
+
+    const record = buildRunRecord({
+      sessionID: id,
+      title: info()?.title,
+      board: liveBoard(),
+      wave: status(),
+    })
+
+    if (!hasRunState({ board: record.board, status: record.wave })) return
+    runs.remember(record)
+  })
 
   createEffect(
     on(
@@ -1579,7 +1689,24 @@ export default function Page() {
           <div class="flex-1 min-h-0 overflow-hidden">
             <Switch>
               <Match when={params.id}>
-                <Show when={activeMessage()}>
+                <SessionDashboard
+                  board={board()}
+                  template={selectedTemplate()}
+                  playbook={selectedPlaybook()}
+                  skills={selectedSkills()}
+                  history={kit.history()}
+                  onRetry={retryNode}
+                  onStagePlaybook={stagePlaybook}
+                />
+                <Show
+                  when={activeMessage()}
+                  fallback={
+                    <div class="h-full pb-[calc(var(--prompt-height,8rem)+32px)] flex flex-col items-center justify-center text-center gap-3 text-text-weak px-6">
+                      <div class="text-16-medium text-text-strong">Waiting for the first coordinator turn</div>
+                      <div class="text-12-regular max-w-xl">The session dashboard is live. As soon as the first user message lands, the execution timeline and file activity will appear here.</div>
+                    </div>
+                  }
+                >
                   <MessageTimeline
                     mobileChanges={mobileChanges()}
                     mobileFallback={reviewContent({
@@ -1656,23 +1783,41 @@ export default function Page() {
                 </Show>
               </Match>
               <Match when={true}>
-                <NewSessionView
-                  worktree={newSessionWorktree()}
-                  onWorktreeChange={(value) => {
-                    if (value === "create") {
-                      setStore("newSessionWorktree", value)
-                      return
-                    }
+                <div class="size-full flex flex-col justify-end items-start gap-4 flex-[1_0_0] self-stretch max-w-200 mx-auto 2xl:max-w-[1000px] px-6 pb-[calc(var(--prompt-height,11.25rem)+64px)]">
+                  <div class="text-20-medium text-text-weaker">{language.t("command.session.new")}</div>
+                  <div class="flex justify-center items-center gap-3">
+                    <div class="text-12-medium text-text-weak select-text">{sdk.directory}</div>
+                  </div>
+                  <div class="flex justify-center items-center gap-1">
+                    <div class="ml-2 min-w-72">
+                      <Select
+                        options={worktrees()}
+                        current={newSessionWorktree()}
+                        label={worktreeLabel}
+                        onSelect={(value) => {
+                          if (!value) return
+                          if (value === "create") {
+                            setStore("newSessionWorktree", value)
+                            return
+                          }
 
-                    setStore("newSessionWorktree", "main")
+                          setStore("newSessionWorktree", "main")
 
-                    const target = value === "main" ? sync.project?.worktree : value
-                    if (!target) return
-                    if (target === sdk.directory) return
-                    layout.projects.open(target)
-                    navigate(`/${base64Encode(target)}/session`)
-                  }}
-                />
+                          const target = value === "main" ? sync.project?.worktree : value
+                          if (!target) return
+                          if (target === sdk.directory) return
+                          layout.projects.open(target)
+                          navigate(`/${base64Encode(target)}/session`)
+                        }}
+                        variant="ghost"
+                        size="small"
+                        triggerStyle={{ width: "100%" }}
+                      >
+                        {(value) => <div class="truncate text-left">{value ? worktreeLabel(value) : worktreeLabel(newSessionWorktree())}</div>}
+                      </Select>
+                    </div>
+                  </div>
+                </div>
               </Match>
             </Switch>
           </div>
