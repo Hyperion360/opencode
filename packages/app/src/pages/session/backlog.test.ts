@@ -73,6 +73,61 @@ describe("session backlog helpers", () => {
     expect(board.operations.quality).toBe(100)
   })
 
+  test("captures validation provenance and condensed log summaries", () => {
+    const board = buildBoard({
+      session: {
+        id: "s4",
+        slug: "s4",
+        projectID: "p1",
+        directory: "/tmp/app",
+        title: "Run",
+        version: "1",
+        time: { created: 0, updated: 0 },
+      },
+      status: { type: "idle" },
+      todos: [{ id: "t1", content: "Verify", status: "completed", priority: "high" }],
+      diffs: [{ file: "src/app.ts", before: "a", after: "b", additions: 4, deletions: 1, status: "modified" }],
+      messages: [{ id: "m1", sessionID: "s4", role: "assistant", time: { created: 10 }, parentID: "u1", modelID: "m", providerID: "p", mode: "default", agent: "implementor", path: { cwd: "/tmp/app/packages/app", root: "/tmp/app" }, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }],
+      parts: [
+        {
+          id: "p1",
+          sessionID: "s4",
+          messageID: "m1",
+          type: "tool",
+          callID: "c1",
+          tool: "test",
+          state: {
+            status: "completed",
+            input: { command: "bun run test:unit" },
+            output: "12 pass\n0 fail\nSaved junit.xml",
+            title: "Unit tests",
+            metadata: {},
+            time: { start: 10, end: 11 },
+            attachments: [],
+          },
+        },
+      ],
+      agents: [{ name: "implementor", mode: "primary", permission: [], options: {} }],
+      commands: [{ name: "test", template: "test", hints: ["test"], agent: "implementor", source: "skill" }],
+      now: 120_000,
+    })
+
+    expect(board.verification.checks[0]).toMatchObject({
+      detail: "Unit tests",
+      provenance: {
+        command: "bun run test:unit",
+        source: "Skill command",
+        agent: "implementor",
+        cwd: "packages/app",
+        call: "c1",
+      },
+      log: {
+        summary: "12 pass · 0 fail",
+        excerpt: "12 pass\n0 fail\nSaved junit.xml",
+      },
+    })
+  })
+
   test("surfaces retry api errors in activity", () => {
     const board = buildBoard({
       session: {
@@ -136,5 +191,14 @@ describe("session backlog helpers", () => {
     expect(view).toContain("data-recovery-approval")
     expect(view).toContain("approval needed")
     expect(view).toContain("onStageRecovery")
+  })
+
+  test("keeps validation drawer markers in the dashboard rendering", async () => {
+    const view = await Bun.file(new URL("../../components/session/session-dashboard.tsx", import.meta.url)).text()
+
+    expect(view).toContain("Open validation drawer")
+    expect(view).toContain("data-validation-drawer")
+    expect(view).toContain("Command provenance")
+    expect(view).toContain("Condensed log summary")
   })
 })

@@ -1,4 +1,5 @@
-import { For, Show } from "solid-js"
+import { createMemo, For, Show } from "solid-js"
+import { createStore } from "solid-js/store"
 import { DateTime } from "luxon"
 import { Button } from "@opencode-ai/ui/button"
 import { Card } from "@opencode-ai/ui/card"
@@ -31,6 +32,18 @@ export function SessionDashboard(props: {
   onStageRecovery: () => void
   onStagePlaybook: () => void
 }) {
+  const [drawer, setDrawer] = createStore({
+    open: false,
+    id: "",
+  })
+
+  const current = createMemo(() => props.board.verification.checks.find((item) => item.id === drawer.id) ?? props.board.verification.checks[0])
+
+  const open = (id?: string) => {
+    if (!id) return
+    setDrawer({ open: true, id })
+  }
+
   return (
     <div data-component="session-dashboard" class="px-4 md:px-6 pt-2 pb-4 border-b border-border-weak bg-background-base/40 backdrop-blur-sm">
       <div class="mx-auto max-w-200 2xl:max-w-[1000px] flex flex-col gap-4">
@@ -106,13 +119,18 @@ export function SessionDashboard(props: {
             </Show>
           </Card>
 
-          <Card class="p-4 flex flex-col gap-3">
-            <div class="flex items-center gap-2">
-              <Icon name="checklist" size="small" />
-              <div>
-                <div class="text-14-medium text-text-strong">Verification and delivery</div>
-                <div class="text-12-regular text-text-weak">{props.board.verification.summary}</div>
+          <Card class="p-4 flex flex-col gap-3" data-validation-open={drawer.open ? "true" : "false"}>
+            <div class="flex items-start justify-between gap-3 flex-wrap">
+              <div class="flex items-center gap-2">
+                <Icon name="checklist" size="small" />
+                <div>
+                  <div class="text-14-medium text-text-strong">Verification and delivery</div>
+                  <div class="text-12-regular text-text-weak">{props.board.verification.summary}</div>
+                </div>
               </div>
+              <Button variant="secondary" size="small" onClick={() => open(current()?.id)} disabled={props.board.verification.checks.length === 0}>
+                Open validation drawer
+              </Button>
             </div>
             <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-12-medium">
               <Metric label="checks" value={props.board.verification.total} />
@@ -127,8 +145,12 @@ export function SessionDashboard(props: {
                     <div class="min-w-0">
                       <div class="text-12-medium text-text-strong truncate">{check.title}</div>
                       <div class="text-11-regular text-text-weak">{check.detail}</div>
+                      <div class="mt-1 text-11-regular text-text-weaker">{check.log.summary}</div>
                     </div>
                     <div class="flex items-center gap-2 shrink-0">
+                      <Button variant="ghost" size="small" onClick={() => open(check.id)}>
+                        Inspect
+                      </Button>
                       <Show when={check.attachments > 0}>
                         <Tag class="px-2 py-1 bg-background-strong text-text-strong">{check.attachments} artifacts</Tag>
                       </Show>
@@ -138,6 +160,44 @@ export function SessionDashboard(props: {
                 )}
               </For>
             </div>
+            <Show when={drawer.open && current()}>
+              {(check) => (
+                <div data-validation-drawer data-validation-check={check().id} class="rounded-lg border border-border-weak px-3 py-3 flex flex-col gap-3 bg-background-strong/40">
+                  <div class="flex items-start justify-between gap-3 flex-wrap">
+                    <div class="min-w-0">
+                      <div class="text-12-medium text-text-strong">Validation drawer · {check().title}</div>
+                      <div class="mt-1 text-11-regular text-text-weak">{check().detail}</div>
+                    </div>
+                    <Button variant="ghost" size="small" onClick={() => setDrawer("open", false)}>
+                      Close
+                    </Button>
+                  </div>
+                  <div class="grid gap-3 lg:grid-cols-2">
+                    <div class="rounded-lg border border-border-weak px-3 py-3 bg-background-base/60">
+                      <div class="text-10-medium uppercase tracking-wide text-text-weaker">Command provenance</div>
+                      <div class="mt-2 text-12-medium text-text-strong break-all font-mono">{check().provenance.command}</div>
+                      <div class="mt-2 flex items-center gap-2 flex-wrap text-11-regular text-text-weak">
+                        <Tag class="px-2 py-1 bg-background-strong text-text-strong">{check().provenance.source}</Tag>
+                        <Show when={check().provenance.agent}>
+                          {(value) => <Tag class="px-2 py-1 bg-background-strong text-text-strong">agent:{value()}</Tag>}
+                        </Show>
+                        <Show when={check().provenance.cwd}>
+                          {(value) => <Tag class="px-2 py-1 bg-background-strong text-text-strong">cwd:{value()}</Tag>}
+                        </Show>
+                      </div>
+                      <div class="mt-2 text-11-regular text-text-weak">Call {check().provenance.call}</div>
+                    </div>
+                    <div class="rounded-lg border border-border-weak px-3 py-3 bg-background-base/60">
+                      <div class="text-10-medium uppercase tracking-wide text-text-weaker">Condensed log summary</div>
+                      <div class="mt-2 text-12-regular text-text-strong">{check().log.summary}</div>
+                      <div class="mt-3 rounded-md border border-border-weak px-3 py-2 text-11-regular text-text-weak whitespace-pre-wrap break-words font-mono bg-background-base">
+                        {check().log.excerpt}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </Show>
           </Card>
 
           <Card class="p-4 flex flex-col gap-3">

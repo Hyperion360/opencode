@@ -70,6 +70,17 @@ export type Check = {
   status: string
   detail: string
   attachments: number
+  provenance: {
+    command: string
+    source: string
+    agent?: string
+    cwd?: string
+    call: string
+  }
+  log: {
+    summary: string
+    excerpt: string
+  }
 }
 
 export type AgentCard = {
@@ -288,6 +299,69 @@ const messageTime = (message?: Message) => {
   return message.time.created
 }
 
+const cut = (value: string, size: number) => (value.length <= size ? value : `${value.slice(0, size - 1).trimEnd()}…`)
+
+const lines = (value: string) => value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)
+
+const text = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : undefined)
+
+const words = (value: unknown) => {
+  if (!Array.isArray(value)) return
+  const list = value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean)
+  if (list.length === 0) return
+  return list.join(" ")
+}
+
+const field = (input: { [key: string]: unknown }, keys: string[]) =>
+  keys.flatMap((key) => {
+    const value = text(input[key])
+    if (value) return [value]
+    const list = words(input[key])
+    return list ? [list] : []
+  })[0]
+
+const origin = (source?: Command["source"], command?: string) => {
+  if (source === "skill") return "Skill command"
+  if (source === "command") return "Slash command"
+  if (source === "mcp") return "MCP command"
+  if (command) return "Tool input"
+  return "Session tool"
+}
+
+const place = (message?: Message) => {
+  if (!message || message.role !== "assistant") return
+  if (message.path.cwd === message.path.root) return "."
+  const root = message.path.root.endsWith("/") ? message.path.root : `${message.path.root}/`
+  if (!message.path.cwd.startsWith(root)) return message.path.cwd
+  return message.path.cwd.slice(root.length)
+}
+
+const output = (part: Extract<Part, { type: "tool" }>) => {
+  if (part.state.status === "completed") return part.state.output
+  if (part.state.status === "error") return part.state.error
+  if (part.state.status === "running") return part.state.title ?? ""
+  return part.state.raw
+}
+
+const empty = (status: Extract<Part, { type: "tool" }>["state"]["status"]) => {
+  if (status === "running") return "Live output is still streaming."
+  if (status === "pending") return "Tool is queued."
+  if (status === "error") return "No error output captured."
+  return "No log output captured."
+}
+
+const log = (part: Extract<Part, { type: "tool" }>) => {
+  const list = lines(output(part))
+  if (list.length === 0) {
+    const value = empty(part.state.status)
+    return { summary: value, excerpt: value }
+  }
+  return {
+    summary: cut(list.slice(0, 2).join(" · "), 180),
+    excerpt: cut(list.slice(0, 4).join("\n"), 320),
+  }
+}
+
 const checkDetail = (part: Extract<Part, { type: "tool" }>) => {
   if (part.state.status === "completed") return part.state.title || title(part.tool)
   if (part.state.status === "error") return part.state.error
@@ -475,6 +549,7 @@ export function buildBoard(input: {
   const subtasks = input.parts.filter((part): part is Extract<Part, { type: "subtask" }> => part.type === "subtask")
   const finishes = input.parts.filter((part): part is Extract<Part, { type: "step-finish" }> => part.type === "step-finish")
   const byMessage = new Map(input.messages.map((message) => [message.id, message]))
+  const byCommand = new Map(input.commands.map((command) => [command.name.toLowerCase(), command]))
   const passed = checks.filter((part) => part.state.status === "completed").length
   const failed = checks.filter((part) => part.state.status === "error").length
   const pending = checks.filter((part) => part.state.status === "pending" || part.state.status === "running").length
@@ -599,13 +674,27 @@ export function buildBoard(input: {
       pending,
       logs: tools.length,
       artifacts: checks.reduce((sum, part) => sum + attachmentCount(part), 0) + patches.length,
-      checks: checks.slice(0, 5).map((part) => ({
-        id: part.id,
-        title: title(part.tool),
-        status: part.state.status,
-        detail: checkDetail(part),
-        attachments: attachmentCount(part),
-      })),
+      checks: checks.slice(0, 5).map((part) => {
+        const tool = part.tool.toLowerCase()
+        const message = byMessage.get(part.messageID)
+        const command = byCommand.get(tool)
+        const value = part.state.status === "pending" ? text(part.state.raw) : field(part.state.input, ["command", "cmd", "script", "arguments", "args"])
+        return {
+          id: part.id,
+          title: title(part.tool),
+          status: part.state.status,
+          detail: checkDetail(part),
+          attachments: attachmentCount(part),
+          provenance: {
+            command: value ?? (command?.name ? `/${command.name}` : title(part.tool)),
+            source: origin(command?.source, value),
+            agent: message?.role === "assistant" ? message.agent : command?.agent,
+            cwd: place(message),
+            call: part.callID,
+          },
+          log: log(part),
+        }
+      }),
     },
     delivery: {
       files: input.diffs.length,
