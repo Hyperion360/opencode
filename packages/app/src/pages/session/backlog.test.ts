@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { applyTemplate, buildApprovalPrompt, buildBoard, buildCiPayload, buildDeliveryPacket, buildIntegrationPayloads, buildIntegrationStagePrompt, buildMetricTrends, buildMetricsReadiness, buildMetricsSnapshot, buildNotificationPayload, buildPlaybookPrompt, buildPullRequestPayload, buildRecoveryPrompt, buildResumePrompt, buildReviewPrompt, buildRetryPrompt, buildSpecReview, kitTemplates } from "./backlog"
+import { applyTemplate, buildApprovalPrompt, buildBoard, buildCiPayload, buildDeliveryPacket, buildHandoffPacket, buildHandoffStagePrompt, buildIntegrationPayloads, buildIntegrationStagePrompt, buildMetricTrends, buildMetricsReadiness, buildMetricsSnapshot, buildNotificationPayload, buildPlaybookPrompt, buildPullRequestPayload, buildRecoveryPrompt, buildResumePrompt, buildReviewPrompt, buildRetryPrompt, buildSpecReview, kitTemplates } from "./backlog"
 
 describe("session backlog helpers", () => {
   test("applies a template as structured intake", () => {
@@ -608,6 +608,153 @@ describe("session backlog helpers", () => {
     expect(ciPrompt).toContain("- No validation checks are attached yet.")
   })
 
+  test("builds reusable specialist handoff packets and stage prompts", () => {
+    const diffs = [{ file: "src/app.ts", before: "a", after: "b", additions: 3, deletions: 1, status: "modified" as const }]
+    const board = buildBoard({
+      session: {
+        id: "s15",
+        slug: "s15",
+        projectID: "p1",
+        directory: "/tmp/app",
+        title: "Pilot handoff",
+        version: "1",
+        time: { created: 0, updated: 0 },
+      },
+      status: { type: "busy" },
+      todos: [{ id: "t1", content: "Recover specialist handoff", status: "in_progress", priority: "high" }],
+      diffs,
+      messages: [],
+      parts: [],
+      agents: [],
+      commands: [],
+      now: 120_000,
+    })
+    const review = buildSpecReview({
+      board,
+      spec: {
+        ready: true,
+        state: "approved",
+        input: {
+          goal: "Ship specialist handoff actions",
+          constraints: "keep delivery and integration flows intact",
+          acceptance: "copy or stage a reusable handoff packet",
+        },
+      },
+    })
+    const delivery = buildDeliveryPacket({
+      title: "Pilot handoff",
+      board,
+      review,
+      diffs,
+      now: 120_000,
+    })
+    const packet = buildHandoffPacket({
+      title: "Pilot handoff",
+      board,
+      review,
+      delivery,
+      specialist: {
+        source: "mixed",
+        updatedAt: 25,
+        agents: [
+          {
+            name: "implementor",
+            description: "Owns the active handoff",
+            mode: "task",
+            active: true,
+            uses: 1,
+            commands: 2,
+          },
+        ],
+        handoff: {
+          prompt: "Keep the delivery evidence intact and resume from the saved review context.",
+          files: {
+            "src/session.tsx": { start: 10, end: 20 },
+            "src/backlog.ts": null,
+          },
+        },
+        stored: {
+          template: "feature-launch",
+          playbook: "parallel-delivery",
+          skills: ["qa-gate"],
+          agents: [],
+        },
+      },
+      template: "Feature launch",
+      playbook: "Parallel delivery",
+      skills: ["Spec guard", "QA gate"],
+      recovery: {
+        state: "failed",
+        tone: "blocked",
+        title: "Recovery required",
+        detail: "quota exceeded during validation",
+        action: {
+          kind: "recover",
+          label: "Stage recovery prompt",
+        },
+        node: "Retry validation",
+        approval: {
+          title: "Approval needed before continuation",
+          detail: "Continuing from the persisted snapshot is risky because validation is still blocked.",
+          label: "Stage approval checkpoint",
+          risks: ["validation is still blocked for the recovered diff set"],
+        },
+      },
+      metrics: {
+        sessionID: "s15",
+        title: "Pilot handoff",
+        updatedAt: 25,
+        activation: 72,
+        quality: 68,
+        execution: "running",
+        verification: "blocked",
+        review: review.state,
+        delivery: {
+          ready: 2,
+          total: 4,
+          files: 1,
+          rollback: false,
+        },
+        retries: 1,
+      },
+      now: 0,
+    })
+    const prompt = buildHandoffStagePrompt({ packet })
+
+    expect(packet.name).toBe("pilot-handoff-specialist-handoff.md")
+    expect(packet.summary).toContain("live + saved specialist context")
+    expect(packet.specialist).toEqual(
+      expect.arrayContaining([
+        "Template: Feature launch",
+        "Playbook: Parallel delivery",
+      ]),
+    )
+    expect(packet.memory).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Latest specialist note:"),
+        "Tracked file: src/session.tsx (lines 10-20)",
+      ]),
+    )
+    expect(packet.risks).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Approval needed before continuation"),
+        expect.stringContaining("Validation evidence is missing"),
+      ]),
+    )
+    expect(packet.next).toEqual(
+      expect.arrayContaining([
+        "Get explicit operator approval before continuing the recovered run.",
+        "Recover Retry validation from the persisted execution graph.",
+      ]),
+    )
+    expect(packet.body).toContain("## Specialist identity")
+    expect(packet.body).toContain("## Recent compact memory context")
+    expect(packet.body).toContain("Metrics: activation 72% · quality 68%")
+    expect(prompt).toContain("Stage this specialist handoff packet from the current session.")
+    expect(prompt).toContain("Outstanding risks:")
+    expect(prompt).toContain("Packet body:")
+  })
+
   test("builds dashboard readiness cues from a persisted metrics fallback", () => {
     const board = buildBoard({
       session: {
@@ -824,6 +971,22 @@ describe("session backlog helpers", () => {
 
     expect(view).toContain("data-specialist-snapshot")
     expect(view).toContain("saved specialist snapshot")
+  })
+
+  test("keeps specialist handoff packet markers in the dashboard and review surfaces", async () => {
+    const dashboard = await Bun.file(new URL("../../components/session/session-dashboard.tsx", import.meta.url)).text()
+    const page = await Bun.file(new URL("../session.tsx", import.meta.url)).text()
+    const helper = await Bun.file(new URL("./backlog.ts", import.meta.url)).text()
+
+    expect(dashboard).toContain("Specialist handoff packet")
+    expect(dashboard).toContain("data-handoff-packet-surface")
+    expect(dashboard).toContain("data-handoff-section")
+    expect(dashboard).toContain("data-handoff-action")
+    expect(page).toContain("data-handoff-review-actions")
+    expect(page).toContain("Copy handoff")
+    expect(page).toContain("Stage handoff")
+    expect(helper).toContain("buildHandoffPacket")
+    expect(helper).toContain("buildHandoffStagePrompt")
   })
 
   test("keeps delivery export and integration hook markers in the dashboard and review surfaces", async () => {

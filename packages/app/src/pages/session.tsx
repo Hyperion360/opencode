@@ -58,6 +58,8 @@ import { MessageTimeline } from "@/pages/session/message-timeline"
 import {
   buildBoard,
   buildDeliveryPacket,
+  buildHandoffPacket,
+  buildHandoffStagePrompt,
   buildIntegrationPayloads,
   buildIntegrationStagePrompt,
   buildMetricsSnapshot,
@@ -118,6 +120,15 @@ const setSessionHandoff = (key: string, patch: Partial<HandoffSession>) => {
   const prev = handoff.session.get(key) ?? { prompt: "", files: {} }
   touch(handoff.session, key, { ...prev, ...patch })
 }
+
+const label = (value?: string) =>
+  value
+    ? value
+        .split(/[._-]+/)
+        .filter(Boolean)
+        .map((item) => item[0]?.toUpperCase() + item.slice(1))
+        .join(" ") || value
+    : undefined
 
 export default function Page() {
   const layout = useLayout()
@@ -864,6 +875,13 @@ export default function Page() {
       snapshot: specialistSnapshot(),
     }),
   )
+  const handoffTemplate = createMemo(() => selectedTemplate()?.label ?? label(specialistFallback().stored?.template))
+  const handoffPlaybook = createMemo(() => selectedPlaybook()?.label ?? label(specialistFallback().stored?.playbook))
+  const handoffSkills = createMemo(() => {
+    const live = selectedSkills().map((item) => item.label)
+    if (live.length > 0) return live
+    return (specialistFallback().stored?.skills ?? []).map((item) => kitSkills.find((skill) => skill.id === item)?.label ?? label(item) ?? item)
+  })
   const handoffPrompt = createMemo(() => handoff.session.get(sessionKey())?.prompt ?? specialistFallback().handoff?.prompt)
   const handoffFiles = createMemo(() => handoff.session.get(sessionKey())?.files ?? specialistFallback().handoff?.files)
   const metric = createMemo(() => {
@@ -929,6 +947,20 @@ export default function Page() {
       review: review(),
       delivery: delivery(),
       diffs: diffs(),
+      metrics: metric(),
+      recovery: recovery(),
+    }),
+  )
+  const handoffPacket = createMemo(() =>
+    buildHandoffPacket({
+      title: info()?.title ?? params.id,
+      board: board(),
+      review: review(),
+      delivery: delivery(),
+      specialist: specialistFallback(),
+      template: handoffTemplate(),
+      playbook: handoffPlaybook(),
+      skills: handoffSkills(),
       metrics: metric(),
       recovery: recovery(),
     }),
@@ -1012,6 +1044,26 @@ export default function Page() {
       })
   }
 
+  const copyHandoff = () => {
+    const packet = handoffPacket()
+    navigator.clipboard
+      .writeText(packet.body)
+      .then(() => {
+        showToast({
+          variant: "success",
+          icon: "circle-check",
+          title: "Specialist handoff copied",
+          description: packet.title,
+        })
+      })
+      .catch((err: unknown) => {
+        showToast({
+          title: language.t("common.requestFailed"),
+          description: errorMessage(err),
+        })
+      })
+  }
+
   const stageIntegration = (kind: "pr" | "ci" | "issue") => {
     const payload = integration()[kind]
     stagePrompt(buildIntegrationStagePrompt({ payload }))
@@ -1020,6 +1072,17 @@ export default function Page() {
       icon: "circle-check",
       title: `${payload.target.label} payload staged`,
       description: payload.title,
+    })
+  }
+
+  const stageHandoff = () => {
+    const packet = handoffPacket()
+    stagePrompt(buildHandoffStagePrompt({ packet }))
+    showToast({
+      variant: "success",
+      icon: "circle-check",
+      title: "Specialist handoff staged",
+      description: packet.title,
     })
   }
 
@@ -1414,6 +1477,14 @@ export default function Page() {
         <Button variant="secondary" size="small" onClick={exportDelivery}>
           Export packet
         </Button>
+        <div data-handoff-review-actions class="flex items-center gap-2">
+          <Button variant="ghost" size="small" onClick={copyHandoff}>
+            Copy handoff
+          </Button>
+          <Button variant="secondary" size="small" onClick={stageHandoff}>
+            Stage handoff
+          </Button>
+        </div>
         <div data-integration-review-actions data-integration-review-target={store.hook} class="flex items-center gap-2">
           <Select
             data-action="integration-hook-target"
@@ -2020,6 +2091,7 @@ export default function Page() {
               <Match when={params.id}>
                 <SessionDashboard
                   board={dashboard()}
+                  handoff={handoffPacket()}
                   agentBoard={specialistFallback().agents}
                   specialist={specialistFallback().source === "live" ? undefined : specialistFallback()}
                   review={review()}
@@ -2034,8 +2106,10 @@ export default function Page() {
                   recovery={recovery()}
                   onRetry={retryNode}
                   onCopyDelivery={copyDelivery}
+                  onCopyHandoff={copyHandoff}
                   onExportDelivery={exportDelivery}
                   onCopyIntegration={copyIntegration}
+                  onStageHandoff={stageHandoff}
                   onStageIntegration={stageIntegration}
                   onStageRecovery={stageRecovery}
                   onStagePlaybook={stagePlaybook}

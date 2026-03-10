@@ -203,6 +203,18 @@ export type DeliveryPacket = {
   body: string
 }
 
+export type HandoffPacket = {
+  title: string
+  name: string
+  summary: string
+  source: SpecialistFallback["source"]
+  specialist: string[]
+  memory: string[]
+  risks: string[]
+  next: string[]
+  body: string
+}
+
 export type SpecSnapshot = {
   ready: boolean
   state?: LivingSpecStatus
@@ -406,6 +418,20 @@ type IntegrationInput = {
   recovery?: RunRecovery
 }
 
+type HandoffInput = {
+  title?: string
+  board: Board
+  review: SpecReview
+  delivery: DeliveryPacket
+  specialist: SpecialistFallback
+  template?: string
+  playbook?: string
+  skills: string[]
+  metrics?: MetricsSnapshot
+  recovery?: RunRecovery
+  now?: number
+}
+
 type RunStore = {
   runs: Record<string, RunRecord>
 }
@@ -558,6 +584,8 @@ const words = (value: unknown) => {
   if (list.length === 0) return
   return list.join(" ")
 }
+
+const unique = (items: Array<string | undefined>) => Array.from(new Set(items.filter((item): item is string => !!item)))
 
 const field = (input: { [key: string]: unknown }, keys: string[]) =>
   keys.flatMap((key) => {
@@ -1193,6 +1221,126 @@ export function buildDeliveryPacket(input: { title?: string; board: Board; revie
   } satisfies DeliveryPacket
 }
 
+const handoffSource = (source: SpecialistFallback["source"]) => {
+  if (source === "persisted") return "saved specialist context"
+  if (source === "mixed") return "live + saved specialist context"
+  return "live specialist context"
+}
+
+const handoffFile = (path: string, selection?: SpecialistSelection | null) => {
+  if (!selection) return path
+  const start = Math.min(selection.start, selection.end)
+  const end = Math.max(selection.start, selection.end)
+  return `${path} (lines ${start}-${end})`
+}
+
+const handoffAgents = (agents: AgentCard[]) =>
+  agents.length > 0
+    ? `Agents: ${agents
+        .slice(0, MAX_SPECIALIST_AGENTS)
+        .map((item) => `${item.name} (${item.active ? "active" : "standby"})`)
+        .join(", ")}`
+    : "Agents: no specialist ownership is recorded yet"
+
+const handoffMemory = (input: HandoffInput) => {
+  const files = Object.entries(input.specialist.handoff?.files ?? {})
+    .slice(0, 4)
+    .map(([path, selection]) => `Tracked file: ${handoffFile(path, selection)}`)
+
+  return unique([
+    input.specialist.handoff?.prompt ? `Latest specialist note: ${cut(input.specialist.handoff.prompt, 180)}` : undefined,
+    ...files,
+    ...input.board.activity.slice(0, 2).map((item) => `Recent signal: ${item.title} — ${cut(item.detail, 140)}`),
+    `Delivery state: ${input.delivery.summary}`,
+  ])
+}
+
+const handoffRisks = (input: HandoffInput) =>
+  unique([
+    input.recovery?.approval ? `${input.recovery.approval.title}: ${input.recovery.approval.detail}` : undefined,
+    ...(input.recovery?.approval?.risks ?? []).map((item) => `Approval risk: ${item}`),
+    ...input.review.risks.slice(0, 4).map((item) => `${item.title}: ${item.detail}`),
+    input.recovery && !input.recovery.approval ? `${input.recovery.title}: ${input.recovery.detail}` : undefined,
+  ]).slice(0, 6)
+
+const handoffNext = (input: HandoffInput) => {
+  const list = unique([
+    input.recovery?.approval ? "Get explicit operator approval before continuing the recovered run." : undefined,
+    input.recovery?.action.kind === "recover"
+      ? `Recover ${input.recovery.node ?? "the blocked node"} from the persisted execution graph.`
+      : undefined,
+    input.recovery?.action.kind === "resume"
+      ? `Resume ${input.recovery.node ?? "the highest-priority unfinished step"} from the persisted execution graph.`
+      : undefined,
+    input.recovery?.action.kind === "review" ? "Review the restored delivery state before handing it off." : undefined,
+    input.board.verification.state !== "ready" ? "Run the narrowest missing validation before final handoff." : undefined,
+    input.review.risks.length > 0 ? "Resolve or explicitly accept the remaining reviewer risks." : undefined,
+    input.board.delivery.files > 0 && !input.board.delivery.rollback ? "Capture rollback evidence before final handoff." : undefined,
+    input.review.risks.length === 0 && input.board.verification.state === "ready" && input.board.delivery.rollback
+      ? "Hand the current packet to the next specialist or reviewer without restarting completed work."
+      : undefined,
+  ])
+
+  if (list.length > 0) return list.slice(0, 4)
+  return ["Review the current session context and decide the next specialist handoff."]
+}
+
+export function buildHandoffPacket(input: HandoffInput) {
+  const base = text(input.title)
+  const packetTitle = base ? `${base} · specialist handoff` : "Session specialist handoff"
+  const stamp = new Date(input.now ?? Date.now()).toISOString()
+  const skills = input.skills.length > 0 ? input.skills : (input.specialist.stored?.skills ?? []).map(title)
+  const specialist = [
+    input.template ? `Template: ${input.template}` : input.specialist.stored?.template ? `Template: ${title(input.specialist.stored.template)}` : "Template: none selected",
+    input.playbook ? `Playbook: ${input.playbook}` : input.specialist.stored?.playbook ? `Playbook: ${title(input.specialist.stored.playbook)}` : "Playbook: none selected",
+    skills.length > 0 ? `Skill packs: ${join(skills)}` : "Skill packs: none attached",
+    handoffAgents(input.specialist.agents),
+  ]
+  const memory = handoffMemory(input)
+  const risks = handoffRisks(input)
+  const next = handoffNext(input)
+  const summary = `${handoffSource(input.specialist.source)} with ${plural(risks.length, "open risk")} and ${plural(next.length, "next action")}.`
+  const activation = input.metrics?.activation ?? input.board.operations.activation
+  const quality = input.metrics?.quality ?? input.board.operations.quality
+  const body = [
+    `# ${packetTitle}`,
+    "",
+    `Generated: ${stamp}`,
+    `Summary: ${summary}`,
+    "",
+    "## Specialist identity",
+    ...specialist.map((item) => `- ${item}`),
+    "",
+    "## Recent compact memory context",
+    ...(memory.length > 0 ? memory.map((item) => `- ${item}`) : ["- No compact specialist memory is attached yet."]),
+    "",
+    "## Outstanding risks",
+    ...(risks.length > 0 ? risks.map((item) => `- ${item}`) : ["- No open reviewer or recovery risks are attached."]),
+    "",
+    "## Next actions",
+    ...next.map((item) => `- ${item}`),
+    "",
+    "## Delivery and review context",
+    `- Review: ${input.review.label}`,
+    `- Delivery: ${input.delivery.summary}`,
+    `- Validation: ${input.board.verification.summary}`,
+    `- Metrics: activation ${activation}% · quality ${quality}%`,
+    ...(input.recovery ? [`- Recovery: ${input.recovery.detail}`] : []),
+  ].join("\n")
+
+  return {
+    title: packetTitle,
+    name: `${slug(base ?? "session")}-specialist-handoff.md`,
+    summary,
+    source: input.specialist.source,
+    specialist,
+    memory,
+    risks,
+    next,
+    body,
+  } satisfies HandoffPacket
+}
+
 export function buildMetricsSnapshot(input: {
   sessionID?: string
   title?: string
@@ -1435,6 +1583,24 @@ export function buildIntegrationStagePrompt(input: { payload: IntegrationHookPay
     "",
     "Payload body:",
     input.payload.body,
+  ].join("\n")
+}
+
+export function buildHandoffStagePrompt(input: { packet: HandoffPacket }) {
+  return [
+    "Stage this specialist handoff packet from the current session.",
+    `Title: ${input.packet.title}`,
+    `Summary: ${input.packet.summary}`,
+    `Context source: ${handoffSource(input.packet.source)}`,
+    "",
+    "Outstanding risks:",
+    ...(input.packet.risks.length > 0 ? input.packet.risks.map((item) => `- ${item}`) : ["- No open reviewer or recovery risks are attached."]),
+    "",
+    "Next actions:",
+    ...input.packet.next.map((item) => `- ${item}`),
+    "",
+    "Packet body:",
+    input.packet.body,
   ].join("\n")
 }
 

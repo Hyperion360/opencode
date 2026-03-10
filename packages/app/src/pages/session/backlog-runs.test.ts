@@ -343,6 +343,94 @@ describe("workspace run persistence", () => {
     })
   })
 
+  test("uses persisted specialist fallback in handoff packets without overriding live run recovery state", () => {
+    const snapshot = backlog.buildSpecialistSnapshot({
+      sessionID: "s-specialist",
+      title: "Recovered specialist",
+      updatedAt: 25,
+      template: "feature-launch",
+      playbook: "parallel-delivery",
+      skills: ["qa-gate"],
+      agents: [
+        {
+          name: "planner",
+          description: "Plans the recovered handoff",
+          mode: "primary",
+          active: false,
+          uses: 1,
+          commands: 1,
+        },
+      ],
+      handoff: {
+        prompt: "Recover the latest specialist handoff before resuming review.",
+        files: { "src/session.tsx": { start: 10, end: 15 } },
+      },
+    })
+    const specialist = backlog.resolveSpecialistFallback({
+      agents: [
+        {
+          name: "implementor",
+          description: "Live agent",
+          mode: "task",
+          active: true,
+          uses: 1,
+          commands: 1,
+        },
+      ],
+      handoff: { prompt: "", files: undefined },
+      snapshot,
+    })
+    const live = board({ state: "running", total: 1, verify: "blocked", files: 2, rollback: false, activation: 41, quality: 77 })
+    const review = backlog.buildSpecReview({
+      board: live,
+      spec: {
+        ready: true,
+        state: "approved",
+        input: {
+          goal: "Resume live recovery safely",
+          constraints: "keep live run state authoritative",
+          acceptance: "reuse persisted specialist memory only as fallback",
+        },
+      },
+    })
+    const delivery = backlog.buildDeliveryPacket({
+      title: "Recovered specialist",
+      board: live,
+      review,
+      diffs: [{ file: "src/session.tsx", before: "a", after: "b", additions: 2, deletions: 1, status: "modified" }],
+      now: 0,
+    })
+    const packet = backlog.buildHandoffPacket({
+      title: "Recovered specialist",
+      board: live,
+      review,
+      delivery,
+      specialist,
+      template: "Feature launch",
+      playbook: "Parallel delivery",
+      skills: ["QA gate"],
+      recovery: {
+        state: "resumable",
+        tone: "running",
+        title: "Ready to resume",
+        detail: "Live session state is empty, but the persisted board shows work was still in flight.",
+        action: {
+          kind: "resume",
+          label: "Stage resume prompt",
+        },
+        node: "Finish validation",
+      },
+      now: 0,
+    })
+
+    expect(specialist.source).toBe("mixed")
+    expect(packet.source).toBe("mixed")
+    expect(packet.memory).toEqual(expect.arrayContaining([expect.stringContaining("Recover the latest specialist handoff")]))
+    expect(packet.specialist).toEqual(expect.arrayContaining(["Agents: implementor (active)"]))
+    expect(packet.next).toEqual(expect.arrayContaining(["Resume Finish validation from the persisted execution graph."]))
+    expect(packet.body).toContain("Validation: Recovery is still in progress.")
+  })
+
   test("restores persisted activation and quality when live state is empty", () => {
     const snapshot = {
       sessionID: "s-metrics",

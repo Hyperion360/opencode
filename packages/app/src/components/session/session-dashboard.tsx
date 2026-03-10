@@ -5,7 +5,7 @@ import { Button } from "@opencode-ai/ui/button"
 import { Card } from "@opencode-ai/ui/card"
 import { Icon } from "@opencode-ai/ui/icon"
 import { Tag } from "@opencode-ai/ui/tag"
-import { buildMetricTrends, buildMetricsReadiness, type Board, type DeliveryPacket, type GraphNode, type IntegrationPayloads, type KitEvent, type KitPlaybook, type KitSkill, type KitTemplate, type MetricsSnapshot, type RunRecovery, type SpecialistFallback, type SpecReview } from "@/pages/session/backlog"
+import { buildMetricTrends, buildMetricsReadiness, type Board, type DeliveryPacket, type GraphNode, type HandoffPacket, type IntegrationPayloads, type KitEvent, type KitPlaybook, type KitSkill, type KitTemplate, type MetricsSnapshot, type RunRecovery, type SpecialistFallback, type SpecReview } from "@/pages/session/backlog"
 
 const tone = (value: string) => {
   if (value === "ready" || value === "success" || value === "completed") return "bg-emerald-500/15 text-emerald-300"
@@ -30,6 +30,7 @@ const change = (value?: number, direction?: "up" | "down" | "flat" | "baseline")
 
 export function SessionDashboard(props: {
   board: Board
+  handoff: HandoffPacket
   agentBoard: Board["agent"]["board"]
   specialist?: SpecialistFallback
   review: SpecReview
@@ -47,8 +48,10 @@ export function SessionDashboard(props: {
   recovery?: RunRecovery
   onRetry: (id: string) => void
   onCopyDelivery: () => void
+  onCopyHandoff: () => void
   onExportDelivery: () => void
   onCopyIntegration: (kind: "pr" | "ci" | "issue") => void
+  onStageHandoff: () => void
   onStageIntegration: (kind: "pr" | "ci" | "issue") => void
   onStageRecovery: () => void
   onStagePlaybook: () => void
@@ -270,6 +273,51 @@ export function SessionDashboard(props: {
                 </div>
               )}
             </For>
+          </div>
+        </Card>
+
+        <Card class="p-4 flex flex-col gap-3" data-handoff-packet-surface data-handoff-packet-source={props.handoff.source}>
+          <div class="flex items-start justify-between gap-3 flex-wrap">
+            <div class="flex items-center gap-2">
+              <Icon name="share" size="small" />
+              <div>
+                <div class="text-14-medium text-text-strong">Specialist handoff packet</div>
+                <div class="text-12-regular text-text-weak">{props.handoff.summary}</div>
+              </div>
+            </div>
+            <div class="flex items-center gap-2 flex-wrap">
+              <Tag class="px-2 py-1 bg-background-strong text-text-strong">
+                {props.handoff.source === "persisted" ? "saved specialist context" : props.handoff.source === "mixed" ? "live + saved specialist context" : "live specialist context"}
+              </Tag>
+              <Button variant="ghost" size="small" data-handoff-action="copy" onClick={props.onCopyHandoff}>
+                Copy handoff
+              </Button>
+              <Button variant="secondary" size="small" data-handoff-action="stage" onClick={props.onStageHandoff}>
+                Stage handoff
+              </Button>
+            </div>
+          </div>
+          <div class="grid gap-2 lg:grid-cols-2">
+            <div data-handoff-section="specialist" class="rounded-lg border border-border-weak px-3 py-3 bg-background-strong/40 flex flex-col gap-2">
+              <div class="text-12-medium text-text-strong">Specialist identity</div>
+              <For each={props.handoff.specialist}>{(item) => <div class="text-11-regular text-text-weak">• {item}</div>}</For>
+            </div>
+            <div data-handoff-section="memory" class="rounded-lg border border-border-weak px-3 py-3 bg-background-base/60 flex flex-col gap-2">
+              <div class="text-12-medium text-text-strong">Recent compact memory context</div>
+              <Show when={props.handoff.memory.length > 0} fallback={<div class="text-11-regular text-text-weak">No compact specialist memory is attached yet.</div>}>
+                <For each={props.handoff.memory}>{(item) => <div class="text-11-regular text-text-weak">• {item}</div>}</For>
+              </Show>
+            </div>
+            <div data-handoff-section="risks" class="rounded-lg border border-border-weak px-3 py-3 bg-background-base/60 flex flex-col gap-2">
+              <div class="text-12-medium text-text-strong">Outstanding risks</div>
+              <Show when={props.handoff.risks.length > 0} fallback={<div class="text-11-regular text-text-weak">No open reviewer or recovery risks are attached.</div>}>
+                <For each={props.handoff.risks}>{(item) => <div class="text-11-regular text-text-weak">• {item}</div>}</For>
+              </Show>
+            </div>
+            <div data-handoff-section="next" class="rounded-lg border border-border-weak px-3 py-3 bg-background-strong/40 flex flex-col gap-2">
+              <div class="text-12-medium text-text-strong">Next actions</div>
+              <For each={props.handoff.next}>{(item) => <div class="text-11-regular text-text-weak">• {item}</div>}</For>
+            </div>
           </div>
         </Card>
 
