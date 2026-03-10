@@ -66,6 +66,124 @@ export function SessionDashboard(props: {
   const currentMetric = createMemo(() => props.metrics ?? props.metricHistory?.latest)
   const trends = createMemo(() => buildMetricTrends({ board: props.board, previous: props.metricHistory?.previous, source: props.metrics ? "workspace" : "live" }))
   const specialistFiles = createMemo(() => Object.keys(props.specialist?.handoff?.files ?? {}).length)
+  const lead = createMemo(() => props.agentBoard.find((item) => item.active) ?? props.agentBoard[0])
+  const owner = createMemo(() => {
+    const item = lead()
+    if (item) {
+      if (props.specialist?.source === "persisted") {
+        return {
+          tone: "warning",
+          label: `${item.name} was the last saved specialist owner.`,
+          detail: item.description ?? "The live board is empty, so the saved snapshot is carrying the last known owner.",
+        }
+      }
+      if (item.active) {
+        return {
+          tone: "running",
+          label: `${item.name} owns the current specialist lane.`,
+          detail: item.description ?? `${item.mode} agent with ${item.commands} linked commands.`,
+        }
+      }
+      return {
+        tone: "warning",
+        label: `${item.name} is the current standby specialist.`,
+        detail: item.description ?? `${item.mode} agent with ${item.commands} linked commands.`,
+      }
+    }
+    if (props.specialist?.updatedAt) {
+      return {
+        tone: "warning",
+        label: "Saved specialist memory is available without an owner.",
+        detail: "The snapshot can inform fallback handoff context, but live ownership still needs to be assigned.",
+      }
+    }
+    return {
+      tone: "warning",
+      label: "No specialist owner is recorded yet.",
+      detail: "Attach a specialist, playbook, or handoff note to keep ownership explicit.",
+    }
+  })
+  const freshness = createMemo(() => {
+    const item = props.specialist
+    if (item?.updatedAt) {
+      const rel = DateTime.fromMillis(item.updatedAt).toRelative() ?? "now"
+      const files = specialistFiles()
+      return {
+        tone: item.source === "persisted" ? "warning" : "ready",
+        label: item.source === "persisted" ? `Saved specialist memory from ${rel}.` : `Fallback specialist memory refreshed ${rel}.`,
+        detail: files > 0 ? `${files} handoff file${files === 1 ? "" : "s"} are attached for fallback review.` : item.handoff?.prompt ? "A saved specialist note is attached for fallback review." : "No handoff files were saved with this memory.",
+      }
+    }
+    if (props.handoff.source === "live") {
+      return {
+        tone: "ready",
+        label: "Live specialist context is current.",
+        detail: "Ownership and handoff cues are coming from the current session state.",
+      }
+    }
+    return {
+      tone: "warning",
+      label: "No saved specialist memory is attached yet.",
+      detail: "The dashboard can still use live state, but reload fallback context is limited.",
+    }
+  })
+  const pending = createMemo(() => {
+    const item = props.recovery
+    if (item?.approval) {
+      return {
+        tone: "blocked",
+        label: "Resume is blocked on approval.",
+        detail: item.approval.detail,
+      }
+    }
+    if (item?.action.kind === "resume") {
+      return {
+        tone: item.tone,
+        label: "Resume handoff is pending.",
+        detail: `Use ${item.action.label.toLowerCase()} to continue without restarting completed work.`,
+      }
+    }
+    if (item?.action.kind === "recover") {
+      return {
+        tone: item.tone,
+        label: "Recovery handoff is pending.",
+        detail: `Use ${item.action.label.toLowerCase()} to repair the blocked node before ownership moves forward.`,
+      }
+    }
+    if (item?.action.kind === "review") {
+      return {
+        tone: item.tone,
+        label: "Recovered handoff is waiting for review.",
+        detail: item.detail,
+      }
+    }
+    if (props.board.verification.state !== "ready") {
+      return {
+        tone: props.board.verification.state === "blocked" ? "blocked" : "warning",
+        label: "Handoff is waiting on validation.",
+        detail: props.board.verification.summary,
+      }
+    }
+    if (props.review.risks.length > 0) {
+      return {
+        tone: props.review.state === "blocked" ? "blocked" : "warning",
+        label: "Handoff is waiting on reviewer decisions.",
+        detail: props.review.summary,
+      }
+    }
+    if (!props.board.delivery.rollback) {
+      return {
+        tone: "warning",
+        label: "Handoff is waiting on rollback evidence.",
+        detail: "Capture rollback visibility before the next specialist or reviewer takes over.",
+      }
+    }
+    return {
+      tone: "ready",
+      label: "Handoff is ready to move.",
+      detail: "Copy or stage the current specialist handoff without restarting completed work.",
+    }
+  })
   const hooks = createMemo(() => [
     {
       kind: "pr" as const,
@@ -297,6 +415,11 @@ export function SessionDashboard(props: {
               </Button>
             </div>
           </div>
+          <div class="grid gap-2 md:grid-cols-3">
+            <Cue id="owner" title="Ownership" tone={owner().tone} label={owner().label} detail={owner().detail} />
+            <Cue id="freshness" title="Freshness" tone={freshness().tone} label={freshness().label} detail={freshness().detail} />
+            <Cue id="pending" title="Pending handoff" tone={pending().tone} label={pending().label} detail={pending().detail} />
+          </div>
           <div class="grid gap-2 lg:grid-cols-2">
             <div data-handoff-section="specialist" class="rounded-lg border border-border-weak px-3 py-3 bg-background-strong/40 flex flex-col gap-2">
               <div class="text-12-medium text-text-strong">Specialist identity</div>
@@ -475,6 +598,9 @@ export function SessionDashboard(props: {
                   <Show when={item().handoff?.prompt}>
                     {(value) => <div class="text-11-regular text-text-strong whitespace-pre-wrap">{value()}</div>}
                   </Show>
+                  <div data-specialist-fallback-note class="text-11-regular text-text-weak">
+                    Saved specialist context stays fallback-only and does not override the current execution, review, or integration state.
+                  </div>
                   <Show when={specialistFiles() > 0}>
                     <div class="text-11-regular text-text-weak">{specialistFiles()} handoff file{specialistFiles() === 1 ? "" : "s"} restored for fallback review context.</div>
                   </Show>
@@ -604,6 +730,19 @@ function Metric(props: { label: string; value: string | number }) {
     <div class="rounded-lg border border-border-weak px-3 py-2 bg-background-strong/60">
       <div class="text-10-medium uppercase tracking-wide text-text-weaker">{props.label}</div>
       <div class="text-14-medium text-text-strong mt-1">{props.value}</div>
+    </div>
+  )
+}
+
+function Cue(props: { id: string; title: string; tone: string; label: string; detail: string }) {
+  return (
+    <div data-specialist-cue={props.id} class="rounded-lg border border-border-weak px-3 py-3 bg-background-base/60 flex flex-col gap-2">
+      <div class="flex items-center justify-between gap-2">
+        <div class="text-10-medium uppercase tracking-wide text-text-weaker">{props.title}</div>
+        <Tag class={`px-2 py-1 ${tone(props.tone)}`}>{props.tone}</Tag>
+      </div>
+      <div class="text-12-medium text-text-strong">{props.label}</div>
+      <div class="text-11-regular text-text-weak">{props.detail}</div>
     </div>
   )
 }

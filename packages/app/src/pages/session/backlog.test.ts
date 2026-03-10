@@ -970,6 +970,9 @@ describe("session backlog helpers", () => {
     const view = await Bun.file(new URL("../../components/session/session-dashboard.tsx", import.meta.url)).text()
 
     expect(view).toContain("data-specialist-snapshot")
+    expect(view).toContain("data-specialist-cue")
+    expect(view).toContain("Pending handoff")
+    expect(view).toContain("data-specialist-fallback-note")
     expect(view).toContain("saved specialist snapshot")
   })
 
