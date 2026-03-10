@@ -215,6 +215,20 @@ function createGlobalSync() {
     return promise
   }
 
+  const refreshSessions = (directory: string) => {
+    sessionMeta.delete(directory)
+    return loadSessions(directory)
+  }
+
+  const forget = (directory: string) => {
+    if (!directory) return
+    queue.clear(directory)
+    if (children.disposeDirectory(directory)) return
+    queueMicrotask(() => {
+      children.disposeDirectory(directory)
+    })
+  }
+
   async function bootstrapInstance(directory: string) {
     if (!directory) return
     const pending = booting.get(directory)
@@ -325,6 +339,7 @@ function createGlobalSync() {
       return globalStore.error
     },
     child: children.child,
+    forget,
     bootstrap,
     updateConfig: (config: Config) => {
       setGlobalStore("reload", "pending")
@@ -336,6 +351,7 @@ function createGlobalSync() {
     },
     project: {
       loadSessions,
+      refreshSessions,
       meta: projectMeta,
       icon: projectIcon,
     },

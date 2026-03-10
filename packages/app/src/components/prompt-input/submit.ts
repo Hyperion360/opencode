@@ -1,4 +1,5 @@
 import { Accessor } from "solid-js"
+import { produce } from "solid-js/store"
 import { useNavigate, useParams } from "@solidjs/router"
 import { createOpencodeClient, type Message } from "@opencode-ai/sdk/v2/client"
 import { showToast } from "@opencode-ai/ui/toast"
@@ -12,7 +13,7 @@ import { useGlobalSync } from "@/context/global-sync"
 import { usePlatform } from "@/context/platform"
 import { useLanguage } from "@/context/language"
 import { Identifier } from "@/utils/id"
-import { Worktree as WorktreeState } from "@/utils/worktree"
+import { addSandbox, Worktree as WorktreeState } from "@/utils/worktree"
 import type { FileSelection } from "@/context/file"
 import { setCursorPosition } from "./editor-dom"
 import { buildRequestParts } from "./build-request-parts"
@@ -163,6 +164,12 @@ export function createPromptSubmit(input: PromptSubmitInput) {
           return
         }
         WorktreeState.pending(createdWorktree.directory)
+        globalSync.set(
+          "project",
+          produce((draft) => {
+            addSandbox(draft, sync.project?.worktree ?? projectDirectory, createdWorktree.directory)
+          }),
+        )
         sessionDirectory = createdWorktree.directory
       }
 

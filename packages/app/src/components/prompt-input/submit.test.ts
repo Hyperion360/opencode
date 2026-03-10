@@ -7,8 +7,11 @@ const createdClients: string[] = []
 const createdSessions: string[] = []
 const sentShell: string[] = []
 const syncedDirectories: string[] = []
+const projects = [{ worktree: "/repo/main", sandboxes: [] as string[] }]
 
 let selected = "/repo/worktree-a"
+let sdkDirectory = "/repo/main"
+let projectRoot = "/repo/main"
 
 const promptValue: Prompt = [{ type: "text", content: "ls", start: 0, end: 2 }]
 
@@ -32,8 +35,6 @@ const clientFor = (directory: string) => ({
 })
 
 beforeAll(async () => {
-  const rootClient = clientFor("/repo/main")
-
   mock.module("@solidjs/router", () => ({
     useNavigate: () => () => undefined,
     useParams: () => ({}),
@@ -89,8 +90,8 @@ beforeAll(async () => {
 
   mock.module("@/context/sdk", () => ({
     useSDK: () => ({
-      directory: "/repo/main",
-      client: rootClient,
+      directory: sdkDirectory,
+      client: clientFor(sdkDirectory),
       url: "http://localhost:4096",
     }),
   }))
@@ -98,6 +99,7 @@ beforeAll(async () => {
   mock.module("@/context/sync", () => ({
     useSync: () => ({
       data: { command: [] },
+      project: { worktree: projectRoot },
       session: {
         optimistic: {
           add: () => undefined,
@@ -110,6 +112,10 @@ beforeAll(async () => {
 
   mock.module("@/context/global-sync", () => ({
     useGlobalSync: () => ({
+      set: (key: string, next: (value: typeof projects) => void) => {
+        if (key !== "project") return
+        next(projects)
+      },
       child: (directory: string) => {
         syncedDirectories.push(directory)
         return [{}, () => undefined]
@@ -138,7 +144,10 @@ beforeEach(() => {
   createdSessions.length = 0
   sentShell.length = 0
   syncedDirectories.length = 0
+  projects.splice(0, projects.length, { worktree: "/repo/main", sandboxes: [] })
   selected = "/repo/worktree-a"
+  sdkDirectory = "/repo/main"
+  projectRoot = "/repo/main"
 })
 
 describe("prompt submit worktree selection", () => {
@@ -171,5 +180,31 @@ describe("prompt submit worktree selection", () => {
     expect(createdSessions).toEqual(["/repo/worktree-a", "/repo/worktree-b"])
     expect(sentShell).toEqual(["/repo/worktree-a", "/repo/worktree-b"])
     expect(syncedDirectories).toEqual(["/repo/worktree-a", "/repo/worktree-b"])
+  })
+
+  test("registers a created worktree on the root project before navigating", async () => {
+    const submit = createPromptSubmit({
+      info: () => undefined,
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      mode: () => "normal",
+      working: () => false,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      newSessionWorktree: () => "create",
+      onNewSessionWorktreeReset: () => undefined,
+      onSubmit: () => undefined,
+    })
+
+    const event = { preventDefault: () => undefined } as unknown as Event
+    await submit.handleSubmit(event)
+
+    expect(projects[0].sandboxes).toEqual(["/repo/main/new"])
+    expect(syncedDirectories).toContain("/repo/main/new")
   })
 })

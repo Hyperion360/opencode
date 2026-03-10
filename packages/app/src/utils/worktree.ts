@@ -1,5 +1,19 @@
 const normalize = (directory: string) => directory.replace(/[\\/]+$/, "")
 
+export function addSandbox(
+  projects: { worktree: string; sandboxes?: string[] }[],
+  root: string,
+  directory: string,
+) {
+  const base = normalize(root)
+  const next = normalize(directory)
+  const project = projects.find((item) => normalize(item.worktree) === base)
+  if (!project) return false
+  const sandboxes = (project.sandboxes ?? []).filter((item) => normalize(item) !== next)
+  project.sandboxes = [...sandboxes, directory]
+  return true
+}
+
 type State =
   | {
       status: "pending"

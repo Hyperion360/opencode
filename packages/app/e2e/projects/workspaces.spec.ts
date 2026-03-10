@@ -20,9 +20,11 @@ import {
   inlineInputSelector,
   projectSwitchSelector,
   projectWorkspacesToggleSelector,
+  promptSelector,
+  sessionItemSelector,
   workspaceItemSelector,
 } from "../selectors"
-import { dirSlug } from "../utils"
+import { createSdk, dirSlug, sessionPath } from "../utils"
 
 function slugFromUrl(url: string) {
   return /\/([^/]+)\/session(?:\/|$)/.exec(url)?.[1] ?? ""
@@ -195,6 +197,14 @@ test("can reset a workspace", async ({ page, sdk, withProject }) => {
 
   await withProject(async (project) => {
     const { slug, directory: createdDir } = await setupWorkspaceTest(page, project)
+    const session = await createSdk(createdDir).session.create({ title: `e2e reset ${Date.now()}` }).then((r) => r.data)
+    if (!session?.id) throw new Error("Failed to create workspace session")
+
+    await page.goto(sessionPath(createdDir, session.id))
+    await expect(page.locator(promptSelector)).toBeVisible()
+
+    await openSidebar(page)
+    await expect(page.locator(sessionItemSelector(session.id)).first()).toBeVisible()
 
     const readme = path.join(createdDir, "README.md")
     const extra = path.join(createdDir, `e2e_reset_${Date.now()}.txt`)
@@ -249,6 +259,9 @@ test("can reset a workspace", async ({ page, sdk, withProject }) => {
           .catch(() => false)
       })
       .toBe(false)
+
+    await expect(page).toHaveURL(new RegExp(`/${slug}/session(?:[/?#]|$)`))
+    await expect(page.locator(sessionItemSelector(session.id))).toHaveCount(0)
   })
 })
 

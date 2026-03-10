@@ -1,9 +1,28 @@
 import { describe, expect, test } from "bun:test"
-import { Worktree } from "./worktree"
+import { addSandbox, Worktree } from "./worktree"
 
 const dir = (name: string) => `/tmp/opencode-worktree-${name}-${crypto.randomUUID()}`
 
 describe("Worktree", () => {
+  test("addSandbox appends and normalizes duplicates", () => {
+    const projects = [
+      {
+        worktree: "/repo/main/",
+        sandboxes: ["/repo/one", "/repo/two/"],
+      },
+    ]
+
+    expect(addSandbox(projects, "/repo/main", "/repo/two")).toBe(true)
+    expect(projects[0].sandboxes).toEqual(["/repo/one", "/repo/two"])
+  })
+
+  test("addSandbox ignores unknown roots", () => {
+    const projects = [{ worktree: "/repo/main", sandboxes: [] as string[] }]
+
+    expect(addSandbox(projects, "/repo/other", "/repo/new")).toBe(false)
+    expect(projects[0].sandboxes).toEqual([])
+  })
+
   test("normalizes trailing slashes", () => {
     const key = dir("normalize")
     Worktree.ready(`${key}/`)

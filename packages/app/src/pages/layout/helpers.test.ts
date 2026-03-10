@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test"
 import { collectOpenProjectDeepLinks, drainPendingDeepLinks, parseDeepLink } from "./deep-links"
-import { displayName, errorMessage, getDraggableId, syncWorkspaceOrder, workspaceKey } from "./helpers"
+import {
+  displayName,
+  errorMessage,
+  forgetWorkspaceSession,
+  forgetWorkspaceState,
+  getDraggableId,
+  syncWorkspaceOrder,
+  workspaceKey,
+} from "./helpers"
 
 describe("layout deep links", () => {
   test("parses open-project deep links", () => {
@@ -88,5 +96,31 @@ describe("layout workspace helpers", () => {
     expect(errorMessage({ data: { message: "boom" } }, "fallback")).toBe("boom")
     expect(errorMessage(new Error("broken"), "fallback")).toBe("broken")
     expect(errorMessage("unknown", "fallback")).toBe("fallback")
+  })
+
+  test("forgets stale workspace session routes", () => {
+    const state = {
+      lastSession: { "/tmp/root": "root", "/tmp/root/workspace": "session-1" } as Record<string, string>,
+      workspaceExpanded: {},
+      workspaceName: {},
+    }
+
+    forgetWorkspaceSession(state, "/tmp/root/workspace")
+
+    expect(state.lastSession).toEqual({ "/tmp/root": "root" })
+  })
+
+  test("forgets deleted workspace sidebar state", () => {
+    const state = {
+      lastSession: { "/tmp/root/workspace/": "session-1" } as Record<string, string>,
+      workspaceExpanded: { "/tmp/root/workspace": true, "/tmp/root/workspace/": true, "/tmp/root": true } as Record<string, boolean>,
+      workspaceName: { "/tmp/root/workspace": "Workspace", "/tmp/root/workspace/": "Workspace", "/tmp/root": "Root" } as Record<string, string>,
+    }
+
+    forgetWorkspaceState(state, "/tmp/root/workspace/")
+
+    expect(state.lastSession).toEqual({})
+    expect(state.workspaceExpanded).toEqual({ "/tmp/root": true })
+    expect(state.workspaceName).toEqual({ "/tmp/root": "Root" })
   })
 })

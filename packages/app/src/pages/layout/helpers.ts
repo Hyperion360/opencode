@@ -8,6 +8,25 @@ export const workspaceKey = (directory: string) => {
   return directory.replace(/[\\/]+$/, "")
 }
 
+type WorkspaceState = {
+  lastSession: Record<string, string>
+  workspaceExpanded: Record<string, boolean>
+  workspaceName: Record<string, string>
+}
+
+export const forgetWorkspaceSession = (state: Pick<WorkspaceState, "lastSession">, directory: string) => {
+  delete state.lastSession[directory]
+}
+
+export const forgetWorkspaceState = (state: WorkspaceState, directory: string) => {
+  const key = workspaceKey(directory)
+  forgetWorkspaceSession(state, directory)
+  delete state.workspaceExpanded[directory]
+  delete state.workspaceExpanded[key]
+  delete state.workspaceName[directory]
+  delete state.workspaceName[key]
+}
+
 export function sortSessions(now: number) {
   const oneMinuteAgo = now - 60 * 1000
   return (a: Session, b: Session) => {

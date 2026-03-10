@@ -41,7 +41,7 @@ import { Binary } from "@opencode-ai/util/binary"
 import { retry } from "@opencode-ai/util/retry"
 import { playSound, soundSrc } from "@/utils/sound"
 import { createAim } from "@/utils/aim"
-import { Worktree as WorktreeState } from "@/utils/worktree"
+import { addSandbox, Worktree as WorktreeState } from "@/utils/worktree"
 
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useTheme, type ColorScheme } from "@opencode-ai/ui/theme"
@@ -60,6 +60,8 @@ import {
   childMapByParent,
   displayName,
   errorMessage,
+  forgetWorkspaceSession,
+  forgetWorkspaceState,
   getDraggableId,
   sortedRootSessions,
   syncWorkspaceOrder,
@@ -1211,7 +1213,9 @@ export default function Layout(props: ParentProps) {
         project.sandboxes = (project.sandboxes ?? []).filter((sandbox) => sandbox !== directory)
       }),
     )
+    setStore(produce((draft) => forgetWorkspaceState(draft, directory)))
     setStore("workspaceOrder", root, (order) => (order ?? []).filter((workspace) => workspace !== directory))
+    globalSync.forget(directory)
 
     layout.projects.close(directory)
     layout.projects.open(root)
@@ -1275,6 +1279,13 @@ export default function Layout(props: ParentProps) {
             .catch(() => undefined),
         ),
     )
+
+    setStore(produce((draft) => forgetWorkspaceSession(draft, directory)))
+    await globalSync.project.refreshSessions(directory)
+
+    if (currentDir() === directory) {
+      navigateToProject(directory)
+    }
 
     setBusy(directory, false)
     dismiss()
@@ -1580,6 +1591,12 @@ export default function Layout(props: ParentProps) {
 
     setBusy(created.directory, true)
     WorktreeState.pending(created.directory)
+    globalSync.set(
+      "project",
+      produce((draft) => {
+        addSandbox(draft, local, created.directory)
+      }),
+    )
     setStore("workspaceExpanded", key, true)
     if (key !== created.directory) {
       setStore("workspaceExpanded", created.directory, true)
